@@ -7,8 +7,12 @@ const path = require('path');
 // ═══════════════════════════════════════════════════════
 // ── KONFIGURASI ───────────────────────────────────────
 // ═══════════════════════════════════════════════════════
-const MQTT_BROKER = 'mqtt://192.168.43.116:1883';
+const MQTT_BROKER = 'mqtt://10.11.11.200:1883';
 const WEB_PORT = 3000;
+const API_HOST = '10.11.10.130';
+const API_PORT = 8090;
+const API_PATH = '/api/utility/capbank/machine-data/store';
+const CAP_TYPE = process.env.CAP_TYPE || 'cap3';
 
 // ═══════════════════════════════════════════════════════
 // ── EXPRESS + SOCKET.IO ───────────────────────────────
@@ -90,6 +94,184 @@ io.on('connection', (socket) => {
 });
 
 // ═══════════════════════════════════════════════════════
+// ── API FORWARDER (EVERY 30 MINUTES) ──────────────────
+// ═══════════════════════════════════════════════════════
+
+function getVal(obj, path, decimals = 2) {
+  if (!obj) return 0;
+  const parts = path.split('.');
+  let val = obj;
+  for (const part of parts) {
+    if (val && val[part] !== undefined) {
+      val = val[part];
+    } else {
+      return 0;
+    }
+  }
+  if (typeof val === 'object' && val !== null) {
+    return val;
+  }
+  const num = Number(val);
+  return isNaN(num) ? 0 : Number(num.toFixed(decimals));
+}
+
+function sendHTTP(payload) {
+  const dataString = JSON.stringify(payload);
+  const options = {
+    hostname: API_HOST,
+    port: API_PORT,
+    path: API_PATH,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(dataString)
+    }
+  };
+
+  console.log(`[API Sender] Mengirim data ke API pada ${new Date().toLocaleTimeString('id-ID')}...`);
+
+  const req = http.request(options, (res) => {
+    let responseData = '';
+    res.on('data', (chunk) => {
+      responseData += chunk;
+    });
+    res.on('end', () => {
+      console.log(`[API Sender] Response Status: ${res.statusCode}`);
+      console.log(`[API Sender] Response Body: ${responseData}`);
+    });
+  });
+
+  req.on('error', (e) => {
+    console.error(`[API Sender] Gagal mengirim data ke API: ${e.message}`);
+  });
+
+  req.write(dataString);
+  req.end();
+}
+
+function sendDataToAPI() {
+  if (!latestRealtime) {
+    console.warn('[API Sender] Tidak dapat mengirim data: belum ada data realtime dari MQTT.');
+    return;
+  }
+  if (!latestCaps) {
+    console.warn('[API Sender] Tidak dapat mengirim data: belum ada data caps dari MQTT.');
+    return;
+  }
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const date = String(now.getDate()).padStart(2, '0');
+  const tanggal = `${year}-${month}-${date}`;
+
+  let sentCount = 0;
+  for (let i = 1; i <= 12; i++) {
+    const isCapOn = latestCaps[`cap${i}`] === 1;
+    if (isCapOn) {
+      const capInfo = capData[String(i)];
+      let phase = (capInfo && capInfo.phase) ? capInfo.phase.toUpperCase() : '';
+      if (!phase) {
+        // Fallback: ganjil = A, genap = C
+        phase = (i % 2 !== 0) ? 'A' : 'C';
+      }
+
+      let capCurrent = 0;
+      if (phase === 'A') {
+        capCurrent = getVal(latestRealtime, 'current.Ia');
+      } else if (phase === 'B') {
+        capCurrent = getVal(latestRealtime, 'current.Ib');
+      } else if (phase === 'C') {
+        capCurrent = getVal(latestRealtime, 'current.Ic');
+      }
+
+
+      const payload = {
+        tanggal: tanggal,
+        cap_type: `cap${i}`,
+        current: capCurrent,
+
+        voltage_ll: {
+          Vab: getVal(latestRealtime, 'voltage_ll.Vab'),
+          Vbc: getVal(latestRealtime, 'voltage_ll.Vbc'),
+          Vca: getVal(latestRealtime, 'voltage_ll.Vca')
+        },
+
+        voltage_ln: {
+          Van: getVal(latestRealtime, 'voltage_ln.Van'),
+          Vbn: getVal(latestRealtime, 'voltage_ln.Vbn'),
+          Vcn: getVal(latestRealtime, 'voltage_ln.Vcn')
+        },
+
+        power: {
+          Ptot: getVal(latestRealtime, 'power.Ptot'),
+          Qtot: getVal(latestRealtime, 'power.Qtot'),
+          Stot: getVal(latestRealtime, 'power.Stot')
+        },
+
+        pf: {
+          PFa: getVal(latestRealtime, 'pf.PFa', 4),
+          PFb: getVal(latestRealtime, 'pf.PFb', 4),
+          PFc: getVal(latestRealtime, 'pf.PFc', 4)
+        },
+
+        cosphi: {
+          dPFa: getVal(latestRealtime, 'cosphi.dPFa', 4),
+          dPFb: getVal(latestRealtime, 'cosphi.dPFb', 4),
+          dPFc: getVal(latestRealtime, 'cosphi.dPFc', 4)
+        },
+
+        freq: getVal(latestRealtime, 'freq'),
+
+        thd_i: {
+          Ia: getVal(latestRealtime, 'thd_i.Ia'),
+          Ib: getVal(latestRealtime, 'thd_i.Ib'),
+          Ic: getVal(latestRealtime, 'thd_i.Ic')
+        },
+
+        thd_v: {
+          Van: getVal(latestRealtime, 'thd_v.Van'),
+          Vbn: getVal(latestRealtime, 'thd_v.Vbn'),
+          Vcn: getVal(latestRealtime, 'thd_v.Vcn')
+        }
+      };
+
+      sendHTTP(payload);
+      sentCount++;
+    }
+  }
+
+  if (sentCount === 0) {
+    console.log('[API Sender] Tidak ada capacitor yang ON saat ini. Tidak ada data yang dikirim ke API.');
+  } else {
+    console.log(`[API Sender] Berhasil mengirim ${sentCount} data capacitor yang aktif ke API.`);
+  }
+}
+
+
+function scheduleNextSend() {
+  const now = new Date();
+  const next = new Date(now);
+
+  const minutes = now.getMinutes();
+  if (minutes < 30) {
+    next.setMinutes(30, 0, 0);
+  } else {
+    next.setMinutes(0, 0, 0);
+    next.setHours(now.getHours() + 1);
+  }
+
+  const msToNext = next.getTime() - now.getTime();
+  
+  console.log(`[Scheduler] Pengiriman data berikutnya dijadwalkan pada ${next.toLocaleTimeString('id-ID')} (dalam ${Math.round(msToNext / 1000)} detik)`);
+
+  setTimeout(() => {
+    sendDataToAPI();
+    scheduleNextSend();
+  }, msToNext);
+}
+
+// ═══════════════════════════════════════════════════════
 // ── START SERVER ──────────────────────────────────────
 // ═══════════════════════════════════════════════════════
 server.listen(WEB_PORT, () => {
@@ -99,4 +281,7 @@ server.listen(WEB_PORT, () => {
   console.log(`  MQTT Broker : ${MQTT_BROKER}`);
   console.log(`  Dashboard   : http://localhost:${WEB_PORT}`);
   console.log('═══════════════════════════════════════════');
+  
+  // Mulai penjadwalan pengiriman data ke API
+  scheduleNextSend();
 });
