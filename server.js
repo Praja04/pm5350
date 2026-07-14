@@ -149,6 +149,58 @@ function sendHTTP(payload) {
   req.end();
 }
 
+function buildPayload(tanggal, capType, current) {
+  return {
+    tanggal: tanggal,
+    cap_type: capType,
+    current: current,
+
+    voltage_ll: {
+      Vab: getVal(latestRealtime, 'voltage_ll.Vab'),
+      Vbc: getVal(latestRealtime, 'voltage_ll.Vbc'),
+      Vca: getVal(latestRealtime, 'voltage_ll.Vca')
+    },
+
+    voltage_ln: {
+      Van: getVal(latestRealtime, 'voltage_ln.Van'),
+      Vbn: getVal(latestRealtime, 'voltage_ln.Vbn'),
+      Vcn: getVal(latestRealtime, 'voltage_ln.Vcn')
+    },
+
+    power: {
+      Ptot: getVal(latestRealtime, 'power.Ptot'),
+      Qtot: getVal(latestRealtime, 'power.Qtot'),
+      Stot: getVal(latestRealtime, 'power.Stot')
+    },
+
+    pf: {
+      PFa: getVal(latestRealtime, 'pf.PFa', 4),
+      PFb: getVal(latestRealtime, 'pf.PFb', 4),
+      PFc: getVal(latestRealtime, 'pf.PFc', 4)
+    },
+
+    cosphi: {
+      dPFa: getVal(latestRealtime, 'cosphi.dPFa', 4),
+      dPFb: getVal(latestRealtime, 'cosphi.dPFb', 4),
+      dPFc: getVal(latestRealtime, 'cosphi.dPFc', 4)
+    },
+
+    freq: getVal(latestRealtime, 'freq'),
+
+    thd_i: {
+      Ia: getVal(latestRealtime, 'thd_i.Ia'),
+      Ib: getVal(latestRealtime, 'thd_i.Ib'),
+      Ic: getVal(latestRealtime, 'thd_i.Ic')
+    },
+
+    thd_v: {
+      Van: getVal(latestRealtime, 'thd_v.Van'),
+      Vbn: getVal(latestRealtime, 'thd_v.Vbn'),
+      Vcn: getVal(latestRealtime, 'thd_v.Vcn')
+    }
+  };
+}
+
 function sendDataToAPI() {
   if (!latestRealtime) {
     console.warn('[API Sender] Tidak dapat mengirim data: belum ada data realtime dari MQTT.');
@@ -185,64 +237,16 @@ function sendDataToAPI() {
         capCurrent = getVal(latestRealtime, 'current.Ic');
       }
 
-
-      const payload = {
-        tanggal: tanggal,
-        cap_type: `cap${i}`,
-        current: capCurrent,
-
-        voltage_ll: {
-          Vab: getVal(latestRealtime, 'voltage_ll.Vab'),
-          Vbc: getVal(latestRealtime, 'voltage_ll.Vbc'),
-          Vca: getVal(latestRealtime, 'voltage_ll.Vca')
-        },
-
-        voltage_ln: {
-          Van: getVal(latestRealtime, 'voltage_ln.Van'),
-          Vbn: getVal(latestRealtime, 'voltage_ln.Vbn'),
-          Vcn: getVal(latestRealtime, 'voltage_ln.Vcn')
-        },
-
-        power: {
-          Ptot: getVal(latestRealtime, 'power.Ptot'),
-          Qtot: getVal(latestRealtime, 'power.Qtot'),
-          Stot: getVal(latestRealtime, 'power.Stot')
-        },
-
-        pf: {
-          PFa: getVal(latestRealtime, 'pf.PFa', 4),
-          PFb: getVal(latestRealtime, 'pf.PFb', 4),
-          PFc: getVal(latestRealtime, 'pf.PFc', 4)
-        },
-
-        cosphi: {
-          dPFa: getVal(latestRealtime, 'cosphi.dPFa', 4),
-          dPFb: getVal(latestRealtime, 'cosphi.dPFb', 4),
-          dPFc: getVal(latestRealtime, 'cosphi.dPFc', 4)
-        },
-
-        freq: getVal(latestRealtime, 'freq'),
-
-        thd_i: {
-          Ia: getVal(latestRealtime, 'thd_i.Ia'),
-          Ib: getVal(latestRealtime, 'thd_i.Ib'),
-          Ic: getVal(latestRealtime, 'thd_i.Ic')
-        },
-
-        thd_v: {
-          Van: getVal(latestRealtime, 'thd_v.Van'),
-          Vbn: getVal(latestRealtime, 'thd_v.Vbn'),
-          Vcn: getVal(latestRealtime, 'thd_v.Vcn')
-        }
-      };
-
+      const payload = buildPayload(tanggal, `cap${i}`, capCurrent);
       sendHTTP(payload);
       sentCount++;
     }
   }
 
   if (sentCount === 0) {
-    console.log('[API Sender] Tidak ada capacitor yang ON saat ini. Tidak ada data yang dikirim ke API.');
+    console.log('[API Sender] Tidak ada capacitor yang ON saat ini. Mengirim data power meter default (cap_type: null)...');
+    const payload = buildPayload(tanggal, null, 0);
+    sendHTTP(payload);
   } else {
     console.log(`[API Sender] Berhasil mengirim ${sentCount} data capacitor yang aktif ke API.`);
   }
@@ -267,7 +271,9 @@ function scheduleNextSend() {
 
   setTimeout(() => {
     sendDataToAPI();
-    scheduleNextSend();
+    // Wait 2 seconds before scheduling the next check to prevent double-firing
+    // due to early setTimeout execution.
+    setTimeout(scheduleNextSend, 2000);
   }, msToNext);
 }
 
