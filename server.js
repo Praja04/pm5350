@@ -29,6 +29,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 let latestRealtime = null;
 let latestCaps = null;
 let capData = {};
+let waitingForCapActive = false;
 
 const mqttClient = mqtt.connect(MQTT_BROKER, {
   clientId: 'nodejs_dashboard_' + Math.random().toString(16).substr(2, 8),
@@ -61,6 +62,15 @@ mqttClient.on('message', (topic, message) => {
     else if (topic === 'pm5350/caps') {
       latestCaps = data;
       io.emit('caps', data);
+
+      if (waitingForCapActive) {
+        const anyCapOn = Object.keys(data).some(key => key.startsWith('cap') && data[key] === 1);
+        if (anyCapOn) {
+          console.log('[Scheduler] Terdeteksi capacitor aktif saat dalam mode tunggu. Mengirim data sekarang...');
+          waitingForCapActive = false;
+          sendDataToAPI();
+        }
+      }
     }
     else if (topic.startsWith('pm5350/cap/')) {
       const capNum = topic.split('/')[2];
@@ -244,9 +254,8 @@ function sendDataToAPI() {
   }
 
   if (sentCount === 0) {
-    console.log('[API Sender] Tidak ada capacitor yang ON saat ini. Mengirim data power meter default (cap_type: null)...');
-    const payload = buildPayload(tanggal, null, 0);
-    sendHTTP(payload);
+    console.log('[API Sender] Tidak ada capacitor yang ON saat ini. Masuk ke mode tunggu hingga ada capacitor aktif.');
+    waitingForCapActive = true;
   } else {
     console.log(`[API Sender] Berhasil mengirim ${sentCount} data capacitor yang aktif ke API.`);
   }
