@@ -31,6 +31,73 @@ let latestCaps = null;
 let capData = {};
 let waitingForCapActive = false;
 
+function sanitizeRealtime(d) {
+  if (!d) return d;
+  
+  function cleanNum(val, min, max, fallback = 0) {
+    const num = Number(val);
+    if (isNaN(num) || num < min || num > max) {
+      return fallback;
+    }
+    return num;
+  }
+
+  if (d.freq !== undefined) d.freq = cleanNum(d.freq, 40, 60, 0);
+
+  if (d.pf) {
+    if (d.pf.PFtot !== undefined) d.pf.PFtot = cleanNum(d.pf.PFtot, -1, 1, 0);
+    if (d.pf.PFa !== undefined) d.pf.PFa = cleanNum(d.pf.PFa, -1, 1, 0);
+    if (d.pf.PFb !== undefined) d.pf.PFb = cleanNum(d.pf.PFb, -1, 1, 0);
+    if (d.pf.PFc !== undefined) d.pf.PFc = cleanNum(d.pf.PFc, -1, 1, 0);
+  }
+
+  if (d.cosphi) {
+    if (d.cosphi.dPFtot !== undefined) d.cosphi.dPFtot = cleanNum(d.cosphi.dPFtot, -1, 1, 0);
+    if (d.cosphi.dPFa !== undefined) d.cosphi.dPFa = cleanNum(d.cosphi.dPFa, -1, 1, 0);
+    if (d.cosphi.dPFb !== undefined) d.cosphi.dPFb = cleanNum(d.cosphi.dPFb, -1, 1, 0);
+    if (d.cosphi.dPFc !== undefined) d.cosphi.dPFc = cleanNum(d.cosphi.dPFc, -1, 1, 0);
+  }
+
+  if (d.thd_i) {
+    if (d.thd_i.Ia !== undefined) d.thd_i.Ia = cleanNum(d.thd_i.Ia, 0, 1000, 0);
+    if (d.thd_i.Ib !== undefined) d.thd_i.Ib = cleanNum(d.thd_i.Ib, 0, 1000, 0);
+    if (d.thd_i.Ic !== undefined) d.thd_i.Ic = cleanNum(d.thd_i.Ic, 0, 1000, 0);
+  }
+
+  if (d.thd_v) {
+    if (d.thd_v.Van !== undefined) d.thd_v.Van = cleanNum(d.thd_v.Van, 0, 1000, 0);
+    if (d.thd_v.Vbn !== undefined) d.thd_v.Vbn = cleanNum(d.thd_v.Vbn, 0, 1000, 0);
+    if (d.thd_v.Vcn !== undefined) d.thd_v.Vcn = cleanNum(d.thd_v.Vcn, 0, 1000, 0);
+  }
+
+  const limit = 1000000;
+  if (d.current) {
+    if (d.current.Ia !== undefined) d.current.Ia = cleanNum(d.current.Ia, -limit, limit, 0);
+    if (d.current.Ib !== undefined) d.current.Ib = cleanNum(d.current.Ib, -limit, limit, 0);
+    if (d.current.Ic !== undefined) d.current.Ic = cleanNum(d.current.Ic, -limit, limit, 0);
+  }
+
+  if (d.voltage_ll) {
+    if (d.voltage_ll.Vab !== undefined) d.voltage_ll.Vab = cleanNum(d.voltage_ll.Vab, -limit, limit, 0);
+    if (d.voltage_ll.Vbc !== undefined) d.voltage_ll.Vbc = cleanNum(d.voltage_ll.Vbc, -limit, limit, 0);
+    if (d.voltage_ll.Vca !== undefined) d.voltage_ll.Vca = cleanNum(d.voltage_ll.Vca, -limit, limit, 0);
+  }
+
+  if (d.voltage_ln) {
+    if (d.voltage_ln.Van !== undefined) d.voltage_ln.Van = cleanNum(d.voltage_ln.Van, -limit, limit, 0);
+    if (d.voltage_ln.Vbn !== undefined) d.voltage_ln.Vbn = cleanNum(d.voltage_ln.Vbn, -limit, limit, 0);
+    if (d.voltage_ln.Vcn !== undefined) d.voltage_ln.Vcn = cleanNum(d.voltage_ln.Vcn, -limit, limit, 0);
+  }
+
+  if (d.power) {
+    if (d.power.Ptot !== undefined) d.power.Ptot = cleanNum(d.power.Ptot, -limit, limit, 0);
+    if (d.power.Qtot !== undefined) d.power.Qtot = cleanNum(d.power.Qtot, -limit, limit, 0);
+    if (d.power.Stot !== undefined) d.power.Stot = cleanNum(d.power.Stot, -limit, limit, 0);
+  }
+
+  return d;
+}
+
 const mqttClient = mqtt.connect(MQTT_BROKER, {
   clientId: 'nodejs_dashboard_' + Math.random().toString(16).substr(2, 8),
   reconnectPeriod: 3000,
@@ -56,8 +123,9 @@ mqttClient.on('message', (topic, message) => {
     const data = JSON.parse(message.toString());
 
     if (topic === 'pm5350/realtime') {
-      latestRealtime = data;
-      io.emit('realtime', data);
+      const sanitized = sanitizeRealtime(data);
+      latestRealtime = sanitized;
+      io.emit('realtime', sanitized);
     }
     else if (topic === 'pm5350/caps') {
       latestCaps = data;
