@@ -122,7 +122,15 @@ function getVal(obj, path, decimals = 2) {
     return val;
   }
   const num = Number(val);
-  return isNaN(num) ? 0 : Number(num.toFixed(decimals));
+  if (isNaN(num)) return 0;
+  
+  // Sanity check: limit numbers to prevent database column overflow (e.g. decimal 12,3 or 20,3).
+  // Glitched Modbus/MQTT readings can sometimes output massive scientific notation values like 1.2E+29.
+  if (num > 1000000 || num < -1000000) {
+    return 0;
+  }
+  
+  return Number(num.toFixed(decimals));
 }
 
 function sendHTTP(payload) {
