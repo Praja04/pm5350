@@ -423,48 +423,96 @@ function scheduleNextSend() {
   }, msToNext);
 }
 
-// Helper function to calculate Shift OEE % Performance & Details
-function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUptimeMin = 0) {
+// Helper function to get Shift Start Info & MySQL Datetime boundary
+function getShiftStartInfo() {
   const now = new Date();
-  const wibString = now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' });
-  const wibTime = new Date(wibString);
-  const day = wibTime.getDay(); // 0 = Sun, 6 = Sat, 1..5 = Mon-Fri
-  const isSaturday = (day === 6);
-  const hour = wibTime.getHours();
-  const minute = wibTime.getMinutes();
-  const totalCurrentMinutes = (hour * 60) + minute;
+  const wibFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  const parts = wibFormatter.formatToParts(now);
+  const getPart = (type) => parts.find(p => p.type === type)?.value || '00';
 
-  const SPEED_DEFAULT = 42; // pcs per minute
+  const yyyy = getPart('year');
+  const mm = getPart('month');
+  const dd = getPart('day');
+  let hh = parseInt(getPart('hour'), 10);
+  if (hh === 24) hh = 0;
+  const min = parseInt(getPart('minute'), 10);
+  const totalCurrentMinutes = (hh * 60) + min;
+
+  const dayOfWeek = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' })).getDay();
+  const isSaturday = (dayOfWeek === 6);
+
+  let shiftStartHour = 6;
   let shiftName = '';
-  let shiftStartMin = 360;
 
   if (isSaturday) {
     if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 660) {
+      shiftStartHour = 6;
       shiftName = 'Shift 1 (Sabtu: 06.00 - 11.00)';
-      shiftStartMin = 360;
     } else if (totalCurrentMinutes >= 660 && totalCurrentMinutes < 960) {
+      shiftStartHour = 11;
       shiftName = 'Shift 2 (Sabtu: 11.00 - 16.00)';
-      shiftStartMin = 660;
     } else if (totalCurrentMinutes >= 960 && totalCurrentMinutes < 1260) {
+      shiftStartHour = 16;
       shiftName = 'Shift 3 (Sabtu: 16.00 - 21.00)';
-      shiftStartMin = 960;
     } else {
+      shiftStartHour = 6;
       shiftName = 'Luar Jam Kerja (Sabtu)';
-      shiftStartMin = totalCurrentMinutes;
     }
   } else {
     if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 840) {
+      shiftStartHour = 6;
       shiftName = 'Shift 1 (06.00 - 14.00)';
-      shiftStartMin = 360;
     } else if (totalCurrentMinutes >= 840 && totalCurrentMinutes < 1320) {
+      shiftStartHour = 14;
       shiftName = 'Shift 2 (14.00 - 22.00)';
-      shiftStartMin = 840;
     } else {
+      shiftStartHour = 22;
       shiftName = 'Shift 3 (22.00 - 06.00)';
-      if (totalCurrentMinutes >= 1320) shiftStartMin = 1320;
-      else shiftStartMin = -120;
     }
   }
+
+  let shiftDateYyyy = yyyy;
+  let shiftDateMm = mm;
+  let shiftDateDd = dd;
+
+  if (!isSaturday && totalCurrentMinutes < 360) {
+    const yesterday = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+    const yParts = wibFormatter.formatToParts(yesterday);
+    shiftDateYyyy = yParts.find(p => p.type === 'year')?.value || yyyy;
+    shiftDateMm = yParts.find(p => p.type === 'month')?.value || mm;
+    shiftDateDd = yParts.find(p => p.type === 'day')?.value || dd;
+  }
+
+  const shiftStartHourStr = String(shiftStartHour).padStart(2, '0');
+  const shiftStartMysqlDatetime = `${shiftDateYyyy}-${shiftDateMm}-${shiftDateDd} ${shiftStartHourStr}:00:00`;
+
+  return {
+    shiftName,
+    shiftStartHour,
+    shiftStartMysqlDatetime,
+    totalCurrentMinutes
+  };
+}
+
+// Helper function to calculate Shift OEE % Performance & Details
+function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUptimeMin = 0) {
+  const shiftInfo = getShiftStartInfo();
+  const totalCurrentMinutes = shiftInfo.totalCurrentMinutes;
+  let shiftStartMin = shiftInfo.shiftStartHour * 60;
+  if (shiftInfo.shiftStartHour === 22 && totalCurrentMinutes < 360) {
+    shiftStartMin = -120; // 22:00 previous day
+  }
+
+  const SPEED_DEFAULT = 42; // pcs per minute
+  const shiftName = shiftInfo.shiftName;
 
   const elapsedShiftMin = Math.max(1, totalCurrentMinutes - shiftStartMin);
   const totalUptimeShiftMin = currentOeeVal + pastShiftUptimeMin;
@@ -518,11 +566,13 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
   const oeeVal = (machineId === 'D1' && latestOeeD1 > 0) ? latestOeeD1 : (machineData.oee || 0);
   let productVal = (machineId === 'D1' && latestCtProductD1 > 0) ? latestCtProductD1 : (machineData.product || 0);
 
-  // Sum past shift uptime and fallback product counter from database if 0
+  // Sum past shift uptime and fallback product counter ONLY for current shift from database
+  const currentShift = getShiftStartInfo();
   let pastShiftUptimeMin = 0;
   try {
     const [historyRows] = await dbPool.query(
-      `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 8`
+      `SELECT * FROM \`${tableName}\` WHERE machine_ts >= ? ORDER BY machine_ts DESC`,
+      [currentShift.shiftStartMysqlDatetime]
     );
     if (historyRows && historyRows.length > 0) {
       pastShiftUptimeMin = historyRows.reduce((acc, r) => {
