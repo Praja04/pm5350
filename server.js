@@ -477,47 +477,80 @@ function calculateShiftOeeDetails(productVal = 0) {
 // ── OEE RETAIL API ENDPOINTS (FOR LARAVEL) ─────────────
 // ═══════════════════════════════════════════════════════
 
-// 1. GET Live Telemetry Status
-app.get(['/api/status', '/api/oee/status'], (req, res) => {
+const machineDataMap = {
+  D1: { oee: 0, product: 0 },
+  D10: { oee: 0, product: 0 }
+};
+
+// 1. GET Live Telemetry Status (Supports ?machine=D1 or /api/d1/status or /api/status)
+app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:machine/status'], (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  const productVal = latestCtProductD1 || 0;
+
+  let rawMachine = req.params.machine || req.query.machine || 'D1';
+  let machineId = rawMachine.toUpperCase();
+  if (!machineId.startsWith('D')) machineId = 'D' + machineId;
+  const cleanLower = machineId.toLowerCase();
+
+  const machineData = machineDataMap[machineId] || {
+    oee: (machineId === 'D1' ? latestOeeD1 : 0),
+    product: (machineId === 'D1' ? latestCtProductD1 : 0)
+  };
+
+  const oeeVal = (machineId === 'D1' && latestOeeD1 > 0) ? latestOeeD1 : (machineData.oee || 0);
+  const productVal = (machineId === 'D1' && latestCtProductD1 > 0) ? latestCtProductD1 : (machineData.product || 0);
   const shiftInfo = calculateShiftOeeDetails(productVal);
 
   res.json({
     success: true,
-    oee_d1: latestOeeD1,
-    ct_productd1: latestCtProductD1,
+    machine_id: machineId,
+    machine_name: `Mesin Retail ${machineId}`,
+    oee: oeeVal,
+    product: productVal,
+    [`oee_${cleanLower}`]: oeeVal,
+    [`ct_product${cleanLower}`]: productVal,
     ...shiftInfo,
     timestamp: new Date().toISOString()
   });
 });
 
-// 2. GET Database History & Chart Data (Last 8 Hours & Log Table)
-app.get(['/api/history', '/api/oee/history'], async (req, res) => {
+// 2. GET Database History & Chart Data (Supports ?machine=D1 or /api/:machine/history or /api/history)
+app.get(['/api/history', '/api/oee/history', '/api/:machine/history', '/api/oee/:machine/history'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+  let rawMachine = req.params.machine || req.query.machine || 'D1';
+  let machineId = rawMachine.toUpperCase();
+  if (!machineId.startsWith('D')) machineId = 'D' + machineId;
+  const cleanLower = machineId.toLowerCase();
+  const tableName = `oee_${cleanLower}`;
+  const oeeCol = `oee_${cleanLower}`;
+  const productCol = `ct_product${cleanLower}`;
+
   try {
     const [rows] = await dbPool.query(
-      'SELECT id, oee_d1, ct_productd1, jam, machine_ts, saved_at FROM oee_d1 ORDER BY machine_ts DESC LIMIT 8'
+      `SELECT id, \`${oeeCol}\` AS oee, \`${productCol}\` AS ct_product, \`${oeeCol}\`, \`${productCol}\`, jam, machine_ts, saved_at, is_stop_shift FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 8`
     );
 
-    // Chart rows ascending order
     const chartRows = [...rows].reverse();
     const chart = {
       labels: chartRows.map(r => r.jam),
-      oeeValues: chartRows.map(r => r.oee_d1),
-      productValues: chartRows.map(r => r.ct_productd1)
+      oeeValues: chartRows.map(r => r[oeeCol] !== undefined ? r[oeeCol] : r.oee),
+      productValues: chartRows.map(r => r[productCol] !== undefined ? r[productCol] : r.ct_product)
     };
 
     res.json({
       success: true,
+      machine_id: machineId,
+      machine_name: `Mesin Retail ${machineId}`,
+      table_name: tableName,
       count: rows.length,
       history: rows,
       chart: chart
     });
   } catch (err) {
-    console.error('[OEE API] Error querying oee_d1 database:', err.message);
+    console.error(`[OEE API] Error querying ${tableName} database:`, err.message);
     res.status(500).json({
       success: false,
+      machine_id: machineId,
       error: err.message,
       history: [],
       chart: { labels: [], oeeValues: [], productValues: [] }
@@ -525,16 +558,21 @@ app.get(['/api/history', '/api/oee/history'], async (req, res) => {
   }
 });
 
-// 3. POST Trigger Reset Pulse (RST_D1)
-app.post(['/api/reset', '/api/oee/reset'], (req, res) => {
-  mqttClient.publish('RST_D1', '1', { qos: 1 }, (err) => {
+// 3. POST Trigger Reset Pulse (Supports ?machine=D1 or /api/:machine/reset)
+app.post(['/api/reset', '/api/oee/reset', '/api/:machine/reset', '/api/oee/:machine/reset'], (req, res) => {
+  let rawMachine = req.params.machine || req.body?.machine || req.query.machine || 'D1';
+  let machineId = rawMachine.toUpperCase();
+  if (!machineId.startsWith('D')) machineId = 'D' + machineId;
+  const resetTopic = `RST_${machineId}`;
+
+  mqttClient.publish(resetTopic, JSON.stringify({ [resetTopic]: [1] }), { qos: 1 }, (err) => {
     if (err) {
-      return res.status(500).json({ success: false, message: err.message });
+      return res.status(500).json({ success: false, machine_id: machineId, message: err.message });
     }
     setTimeout(() => {
-      mqttClient.publish('RST_D1', '0', { qos: 1 });
+      mqttClient.publish(resetTopic, JSON.stringify({ [resetTopic]: [0] }), { qos: 1 });
     }, 500);
-    res.json({ success: true, message: 'Pulse reset RST_D1 berhasil terkirim via MQTT' });
+    res.json({ success: true, machine_id: machineId, message: `Reset pulse (1 -> 0) sent to ${resetTopic}` });
   });
 });
 
