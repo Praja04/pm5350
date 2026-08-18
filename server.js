@@ -149,11 +149,21 @@ mqttClient.on('reconnect', () => {
 });
 
 mqttClient.on('message', (topic, message) => {
-  // Handle OEE Telemetry Topics
-  if (topic === 'OEE_D1') {
+  // Handle OEE Telemetry Topics (Supports JSON Object, Nested d.CT_PRODUCTD1, and Array values [ 10402 ])
+  if (topic === 'OEE_D1' || topic.startsWith('OEE_')) {
     try {
       const payload = JSON.parse(message.toString());
-      latestOeeD1 = payload?.d?.OEE_D1 ?? payload?.OEE_D1 ?? 0;
+      const d = payload?.d || payload;
+      
+      const rawOee = d?.OEE_D1 ?? d?.oee_d1;
+      if (rawOee !== undefined && rawOee !== null) {
+        latestOeeD1 = Array.isArray(rawOee) ? (parseInt(rawOee[0]) || 0) : (parseInt(rawOee) || 0);
+      }
+
+      const rawProduct = d?.CT_PRODUCTD1 ?? d?.ct_productd1;
+      if (rawProduct !== undefined && rawProduct !== null) {
+        latestCtProductD1 = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
+      }
     } catch (e) {
       latestOeeD1 = parseInt(message.toString()) || 0;
     }
@@ -162,7 +172,8 @@ mqttClient.on('message', (topic, message) => {
   if (topic === 'CT_PRODUCTD1') {
     try {
       const payload = JSON.parse(message.toString());
-      latestCtProductD1 = payload?.d?.CT_PRODUCTD1 ?? payload?.CT_PRODUCTD1 ?? 0;
+      const rawProduct = payload?.d?.CT_PRODUCTD1 ?? payload?.CT_PRODUCTD1;
+      latestCtProductD1 = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
     } catch (e) {
       latestCtProductD1 = parseInt(message.toString()) || 0;
     }
@@ -468,6 +479,7 @@ function calculateShiftOeeDetails(productVal = 0) {
 
 // 1. GET Live Telemetry Status
 app.get(['/api/status', '/api/oee/status'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   const productVal = latestCtProductD1 || 0;
   const shiftInfo = calculateShiftOeeDetails(productVal);
 
@@ -482,6 +494,7 @@ app.get(['/api/status', '/api/oee/status'], (req, res) => {
 
 // 2. GET Database History & Chart Data (Last 8 Hours & Log Table)
 app.get(['/api/history', '/api/oee/history'], async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   try {
     const [rows] = await dbPool.query(
       'SELECT id, oee_d1, ct_productd1, jam, machine_ts, saved_at FROM oee_d1 ORDER BY machine_ts DESC LIMIT 8'
