@@ -473,7 +473,9 @@ function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUp
   // True OEE Shift % = Availability (Uptime / Elapsed) * Performance (Output / (Uptime * 42))
   const availabilityRatio = Math.min(1.0, totalUptimeShiftMin / elapsedShiftMin);
   const maxUptimeCapacity = totalUptimeShiftMin * SPEED_DEFAULT;
-  const performanceRatio = maxUptimeCapacity > 0 ? Math.min(1.0, productVal / maxUptimeCapacity) : 1.0;
+  const performanceRatio = (productVal > 0 && maxUptimeCapacity > 0) 
+    ? Math.min(1.0, productVal / maxUptimeCapacity) 
+    : 1.0;
   const oeeShiftPct = (availabilityRatio * performanceRatio * 100).toFixed(1);
 
   return {
@@ -506,6 +508,7 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
   const cleanLower = machineId.toLowerCase();
   const tableName = `oee_${cleanLower}`;
   const oeeCol = `oee_${cleanLower}`;
+  const productCol = `ct_product${cleanLower}`;
 
   const machineData = machineDataMap[machineId] || {
     oee: (machineId === 'D1' ? latestOeeD1 : 0),
@@ -513,16 +516,24 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
   };
 
   const oeeVal = (machineId === 'D1' && latestOeeD1 > 0) ? latestOeeD1 : (machineData.oee || 0);
-  const productVal = (machineId === 'D1' && latestCtProductD1 > 0) ? latestCtProductD1 : (machineData.product || 0);
+  let productVal = (machineId === 'D1' && latestCtProductD1 > 0) ? latestCtProductD1 : (machineData.product || 0);
 
-  // Sum past shift uptime from database
+  // Sum past shift uptime and fallback product counter from database if 0
   let pastShiftUptimeMin = 0;
   try {
     const [historyRows] = await dbPool.query(
-      `SELECT \`${oeeCol}\` AS oee FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 8`
+      `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 8`
     );
     if (historyRows && historyRows.length > 0) {
-      pastShiftUptimeMin = historyRows.reduce((acc, r) => acc + (Number(r.oee) || 0), 0);
+      pastShiftUptimeMin = historyRows.reduce((acc, r) => {
+        const val = r[oeeCol] !== undefined ? r[oeeCol] : r.oee;
+        return acc + (Number(val) || 0);
+      }, 0);
+
+      if (productVal === 0) {
+        const latestProd = historyRows[0][productCol] !== undefined ? historyRows[0][productCol] : historyRows[0].ct_product;
+        if (latestProd > 0) productVal = Number(latestProd);
+      }
     }
   } catch (e) {
     // skip if table doesn't exist yet
