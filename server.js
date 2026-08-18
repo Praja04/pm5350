@@ -430,11 +430,11 @@ app.get(['/api/status', '/api/oee/status'], (req, res) => {
 app.get(['/api/history', '/api/oee/history'], async (req, res) => {
   try {
     const [rows] = await dbPool.query(
-      'SELECT id, oee_d1, ct_productd1, jam, machine_ts, saved_at FROM oee_d1 ORDER BY machine_ts DESC LIMIT 15'
+      'SELECT id, oee_d1, ct_productd1, jam, machine_ts, saved_at FROM oee_d1 ORDER BY machine_ts DESC LIMIT 8'
     );
 
     // Chart rows ascending order
-    const chartRows = [...rows].reverse().slice(-8);
+    const chartRows = [...rows].reverse();
     const chart = {
       labels: chartRows.map(r => r.jam),
       oeeValues: chartRows.map(r => r.oee_d1),
