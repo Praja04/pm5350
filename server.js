@@ -556,9 +556,25 @@ app.get(['/api/history', '/api/oee/history', '/api/:machine/history', '/api/oee/
   const productCol = `ct_product${cleanLower}`;
 
   try {
-    const [rows] = await dbPool.query(
-      `SELECT id, \`${oeeCol}\` AS oee, \`${productCol}\` AS ct_product, \`${oeeCol}\`, \`${productCol}\`, jam, machine_ts, saved_at, is_stop_shift FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 8`
+    const [rawRows] = await dbPool.query(
+      `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 8`
     );
+
+    const rows = rawRows.map(r => {
+      const oeeVal = r[oeeCol] !== undefined ? r[oeeCol] : (r.oee || 0);
+      const prodVal = r[productCol] !== undefined ? r[productCol] : (r.ct_product || 0);
+      return {
+        id: r.id,
+        oee: oeeVal,
+        ct_product: prodVal,
+        [oeeCol]: oeeVal,
+        [productCol]: prodVal,
+        jam: r.jam,
+        machine_ts: r.machine_ts,
+        saved_at: r.saved_at,
+        is_stop_shift: r.is_stop_shift !== undefined ? r.is_stop_shift : 0
+      };
+    });
 
     const chartRows = [...rows].reverse();
     const chart = {
