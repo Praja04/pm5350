@@ -424,7 +424,7 @@ function scheduleNextSend() {
 }
 
 // Helper function to calculate Shift OEE % Performance & Details
-function calculateShiftOeeDetails(productVal = 0) {
+function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUptimeMin = 0) {
   const now = new Date();
   const wibString = now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' });
   const wibTime = new Date(wibString);
@@ -436,39 +436,53 @@ function calculateShiftOeeDetails(productVal = 0) {
 
   const SPEED_DEFAULT = 42; // pcs per minute
   let shiftName = '';
-  let shiftDurationMin = 480; // 8 hours default for Mon-Fri
+  let shiftStartMin = 360;
 
   if (isSaturday) {
-    shiftDurationMin = 300; // 5 hours = 300 mins
     if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 660) {
       shiftName = 'Shift 1 (Sabtu: 06.00 - 11.00)';
+      shiftStartMin = 360;
     } else if (totalCurrentMinutes >= 660 && totalCurrentMinutes < 960) {
       shiftName = 'Shift 2 (Sabtu: 11.00 - 16.00)';
+      shiftStartMin = 660;
     } else if (totalCurrentMinutes >= 960 && totalCurrentMinutes < 1260) {
       shiftName = 'Shift 3 (Sabtu: 16.00 - 21.00)';
+      shiftStartMin = 960;
     } else {
       shiftName = 'Luar Jam Kerja (Sabtu)';
+      shiftStartMin = totalCurrentMinutes;
     }
   } else {
-    shiftDurationMin = 480; // 8 hours default
     if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 840) {
       shiftName = 'Shift 1 (06.00 - 14.00)';
+      shiftStartMin = 360;
     } else if (totalCurrentMinutes >= 840 && totalCurrentMinutes < 1320) {
       shiftName = 'Shift 2 (14.00 - 22.00)';
+      shiftStartMin = 840;
     } else {
       shiftName = 'Shift 3 (22.00 - 06.00)';
+      if (totalCurrentMinutes >= 1320) shiftStartMin = 1320;
+      else shiftStartMin = -120;
     }
   }
 
-  const maxShiftCapacity = SPEED_DEFAULT * shiftDurationMin;
-  const oeeShiftPct = maxShiftCapacity > 0 
-    ? Math.min(100, (productVal / maxShiftCapacity) * 100).toFixed(1)
-    : '0.0';
+  const elapsedShiftMin = Math.max(1, totalCurrentMinutes - shiftStartMin);
+  const totalUptimeShiftMin = currentOeeVal + pastShiftUptimeMin;
+  const downtimeShiftMin = Math.max(0, elapsedShiftMin - totalUptimeShiftMin);
+
+  // True OEE Shift % = Availability (Uptime / Elapsed) * Performance (Output / (Uptime * 42))
+  const availabilityRatio = Math.min(1.0, totalUptimeShiftMin / elapsedShiftMin);
+  const maxUptimeCapacity = totalUptimeShiftMin * SPEED_DEFAULT;
+  const performanceRatio = maxUptimeCapacity > 0 ? Math.min(1.0, productVal / maxUptimeCapacity) : 1.0;
+  const oeeShiftPct = (availabilityRatio * performanceRatio * 100).toFixed(1);
 
   return {
     shift_name: shiftName,
     oee_shift_pct: parseFloat(oeeShiftPct),
-    max_shift_capacity: maxShiftCapacity,
+    shift_elapsed_min: elapsedShiftMin,
+    shift_uptime_min: totalUptimeShiftMin,
+    shift_downtime_min: downtimeShiftMin,
+    max_shift_capacity: SPEED_DEFAULT * 480,
     speed_standard_ppm: SPEED_DEFAULT
   };
 }
@@ -483,13 +497,15 @@ const machineDataMap = {
 };
 
 // 1. GET Live Telemetry Status (Supports ?machine=D1 or /api/d1/status or /api/status)
-app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:machine/status'], (req, res) => {
+app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:machine/status'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
   let rawMachine = req.params.machine || req.query.machine || 'D1';
   let machineId = rawMachine.toUpperCase();
   if (!machineId.startsWith('D')) machineId = 'D' + machineId;
   const cleanLower = machineId.toLowerCase();
+  const tableName = `oee_${cleanLower}`;
+  const oeeCol = `oee_${cleanLower}`;
 
   const machineData = machineDataMap[machineId] || {
     oee: (machineId === 'D1' ? latestOeeD1 : 0),
@@ -498,7 +514,21 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
 
   const oeeVal = (machineId === 'D1' && latestOeeD1 > 0) ? latestOeeD1 : (machineData.oee || 0);
   const productVal = (machineId === 'D1' && latestCtProductD1 > 0) ? latestCtProductD1 : (machineData.product || 0);
-  const shiftInfo = calculateShiftOeeDetails(productVal);
+
+  // Sum past shift uptime from database
+  let pastShiftUptimeMin = 0;
+  try {
+    const [historyRows] = await dbPool.query(
+      `SELECT \`${oeeCol}\` AS oee FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 8`
+    );
+    if (historyRows && historyRows.length > 0) {
+      pastShiftUptimeMin = historyRows.reduce((acc, r) => acc + (Number(r.oee) || 0), 0);
+    }
+  } catch (e) {
+    // skip if table doesn't exist yet
+  }
+
+  const shiftInfo = calculateShiftOeeDetails(productVal, oeeVal, pastShiftUptimeMin);
 
   res.json({
     success: true,
