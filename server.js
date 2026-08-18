@@ -3,6 +3,22 @@ const http = require('http');
 const { Server } = require('socket.io');
 const mqtt = require('mqtt');
 const path = require('path');
+require('dotenv').config();
+const mysql = require('mysql2/promise');
+
+// ═══════════════════════════════════════════════════════
+// ── DATABASE POOL (OEE RETAIL) ────────────────────────
+// ═══════════════════════════════════════════════════════
+const dbPool = mysql.createPool({
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: parseInt(process.env.DB_PORT || '3306'),
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASS || '',
+  database: process.env.DB_NAME || 'project_utility',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
 
 // ═══════════════════════════════════════════════════════
 // ── KONFIGURASI ───────────────────────────────────────
@@ -20,6 +36,17 @@ const CAP_TYPE = process.env.CAP_TYPE || 'cap3';
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+
+// Enable CORS for Laravel & External Dashboard
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -98,15 +125,18 @@ function sanitizeRealtime(d) {
   return d;
 }
 
+let latestOeeD1 = 0;
+let latestCtProductD1 = 0;
+
 const mqttClient = mqtt.connect(MQTT_BROKER, {
-  clientId: 'nodejs_dashboard_' + Math.random().toString(16).substr(2, 8),
+  clientId: 'nodejs_pm5350_combo_' + Math.random().toString(16).substr(2, 8),
   reconnectPeriod: 3000,
 });
 
 mqttClient.on('connect', () => {
   console.log('[MQTT] Terhubung ke broker:', MQTT_BROKER);
-  mqttClient.subscribe('pm5350/#', (err) => {
-    if (!err) console.log('[MQTT] Subscribe ke pm5350/# berhasil');
+  mqttClient.subscribe(['pm5350/#', 'OEE_D1', 'CT_PRODUCTD1'], (err) => {
+    if (!err) console.log('[MQTT] Subscribe ke pm5350/#, OEE_D1, & CT_PRODUCTD1 berhasil');
   });
 });
 
@@ -119,6 +149,26 @@ mqttClient.on('reconnect', () => {
 });
 
 mqttClient.on('message', (topic, message) => {
+  // Handle OEE Telemetry Topics
+  if (topic === 'OEE_D1') {
+    try {
+      const payload = JSON.parse(message.toString());
+      latestOeeD1 = payload?.d?.OEE_D1 ?? payload?.OEE_D1 ?? 0;
+    } catch (e) {
+      latestOeeD1 = parseInt(message.toString()) || 0;
+    }
+    return;
+  }
+  if (topic === 'CT_PRODUCTD1') {
+    try {
+      const payload = JSON.parse(message.toString());
+      latestCtProductD1 = payload?.d?.CT_PRODUCTD1 ?? payload?.CT_PRODUCTD1 ?? 0;
+    } catch (e) {
+      latestCtProductD1 = parseInt(message.toString()) || 0;
+    }
+    return;
+  }
+
   try {
     const data = JSON.parse(message.toString());
 
@@ -363,14 +413,74 @@ function scheduleNextSend() {
 }
 
 // ═══════════════════════════════════════════════════════
+// ── OEE RETAIL API ENDPOINTS (FOR LARAVEL) ─────────────
+// ═══════════════════════════════════════════════════════
+
+// 1. GET Live Telemetry Status
+app.get(['/api/status', '/api/oee/status'], (req, res) => {
+  res.json({
+    success: true,
+    oee_d1: latestOeeD1,
+    ct_productd1: latestCtProductD1,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// 2. GET Database History & Chart Data (Last 8 Hours & Log Table)
+app.get(['/api/history', '/api/oee/history'], async (req, res) => {
+  try {
+    const [rows] = await dbPool.query(
+      'SELECT id, oee_d1, ct_productd1, jam, machine_ts, saved_at FROM oee_d1 ORDER BY machine_ts DESC LIMIT 15'
+    );
+
+    // Chart rows ascending order
+    const chartRows = [...rows].reverse().slice(-8);
+    const chart = {
+      labels: chartRows.map(r => r.jam),
+      oeeValues: chartRows.map(r => r.oee_d1),
+      productValues: chartRows.map(r => r.ct_productd1)
+    };
+
+    res.json({
+      success: true,
+      count: rows.length,
+      history: rows,
+      chart: chart
+    });
+  } catch (err) {
+    console.error('[OEE API] Error querying oee_d1 database:', err.message);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      history: [],
+      chart: { labels: [], oeeValues: [], productValues: [] }
+    });
+  }
+});
+
+// 3. POST Trigger Reset Pulse (RST_D1)
+app.post(['/api/reset', '/api/oee/reset'], (req, res) => {
+  mqttClient.publish('RST_D1', '1', { qos: 1 }, (err) => {
+    if (err) {
+      return res.status(500).json({ success: false, message: err.message });
+    }
+    setTimeout(() => {
+      mqttClient.publish('RST_D1', '0', { qos: 1 });
+    }, 500);
+    res.json({ success: true, message: 'Pulse reset RST_D1 berhasil terkirim via MQTT' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════
 // ── START SERVER ──────────────────────────────────────
 // ═══════════════════════════════════════════════════════
 server.listen(WEB_PORT, () => {
   console.log('═══════════════════════════════════════════');
-  console.log('  PM5350 CapBank Dashboard');
+  console.log('  PM5350 + OEE Retail Dual Dashboard Server');
   console.log('═══════════════════════════════════════════');
   console.log(`  MQTT Broker : ${MQTT_BROKER}`);
   console.log(`  Dashboard   : http://localhost:${WEB_PORT}`);
+  console.log(`  OEE API     : http://localhost:${WEB_PORT}/api/status & /api/history`);
   console.log('═══════════════════════════════════════════');
   
   // Mulai penjadwalan pengiriman data ke API
