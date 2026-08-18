@@ -423,7 +423,7 @@ function scheduleNextSend() {
   }, msToNext);
 }
 
-// Helper function to get Shift Start Info & MySQL Datetime boundary
+// Helper function to get Shift Start Info & Boundaries
 function getShiftStartInfo() {
   const now = new Date();
   const wibFormatter = new Intl.DateTimeFormat('en-CA', {
@@ -449,65 +449,103 @@ function getShiftStartInfo() {
   const dayOfWeek = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' })).getDay();
   const isSaturday = (dayOfWeek === 6);
 
-  let shiftStartHour = 6;
   let shiftName = '';
+  let startHour = 6;
+  let endHour = 14;
 
   if (isSaturday) {
     if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 660) {
-      shiftStartHour = 6;
       shiftName = 'Shift 1 (Sabtu: 06.00 - 11.00)';
+      startHour = 6; endHour = 11;
     } else if (totalCurrentMinutes >= 660 && totalCurrentMinutes < 960) {
-      shiftStartHour = 11;
       shiftName = 'Shift 2 (Sabtu: 11.00 - 16.00)';
+      startHour = 11; endHour = 16;
     } else if (totalCurrentMinutes >= 960 && totalCurrentMinutes < 1260) {
-      shiftStartHour = 16;
       shiftName = 'Shift 3 (Sabtu: 16.00 - 21.00)';
+      startHour = 16; endHour = 21;
     } else {
-      shiftStartHour = 6;
       shiftName = 'Luar Jam Kerja (Sabtu)';
+      startHour = 0; endHour = 24;
     }
   } else {
     if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 840) {
-      shiftStartHour = 6;
       shiftName = 'Shift 1 (06.00 - 14.00)';
+      startHour = 6; endHour = 14;
     } else if (totalCurrentMinutes >= 840 && totalCurrentMinutes < 1320) {
-      shiftStartHour = 14;
       shiftName = 'Shift 2 (14.00 - 22.00)';
+      startHour = 14; endHour = 22;
     } else {
-      shiftStartHour = 22;
       shiftName = 'Shift 3 (22.00 - 06.00)';
+      startHour = 22; endHour = 6;
     }
   }
 
-  let shiftDateYyyy = yyyy;
-  let shiftDateMm = mm;
-  let shiftDateDd = dd;
-
-  if (!isSaturday && totalCurrentMinutes < 360) {
-    const yesterday = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-    const yParts = wibFormatter.formatToParts(yesterday);
-    shiftDateYyyy = yParts.find(p => p.type === 'year')?.value || yyyy;
-    shiftDateMm = yParts.find(p => p.type === 'month')?.value || mm;
-    shiftDateDd = yParts.find(p => p.type === 'day')?.value || dd;
-  }
-
-  const shiftStartHourStr = String(shiftStartHour).padStart(2, '0');
-  const shiftStartMysqlDatetime = `${shiftDateYyyy}-${shiftDateMm}-${shiftDateDd} ${shiftStartHourStr}:00:00`;
-
+  const currentDateStr = `${yyyy}-${mm}-${dd}`;
   return {
     shiftName,
-    shiftStartHour,
-    shiftStartMysqlDatetime,
-    totalCurrentMinutes
+    startHour,
+    endHour,
+    currentDateStr,
+    totalCurrentMinutes,
+    isSaturday
   };
+}
+
+// Check if a database row belongs to the current active shift
+function isRowInCurrentShift(row, shiftInfo) {
+  if (!row || !row.machine_ts) return false;
+  let dateObj = (row.machine_ts instanceof Date) ? row.machine_ts : new Date(row.machine_ts);
+  if (isNaN(dateObj.getTime())) return false;
+
+  const wibFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  const parts = wibFormatter.formatToParts(dateObj);
+  const getPart = (type) => parts.find(p => p.type === type)?.value || '00';
+
+  const yyyy = getPart('year');
+  const mm = getPart('month');
+  const dd = getPart('day');
+  let hh = parseInt(getPart('hour'), 10);
+  if (hh === 24) hh = 0;
+
+  const rowDateStr = `${yyyy}-${mm}-${dd}`;
+  const { startHour, endHour, currentDateStr } = shiftInfo;
+
+  if (startHour < endHour) {
+    return (rowDateStr === currentDateStr && hh >= startHour && hh < endHour);
+  } else {
+    // Shift 3 crossing midnight (22:00 - 06:00)
+    if (hh >= 22) {
+      if (shiftInfo.totalCurrentMinutes >= 1320) {
+        return rowDateStr === currentDateStr;
+      } else {
+        const yesterday = new Date(Date.now() - 86400000);
+        const yParts = wibFormatter.formatToParts(yesterday);
+        const yStr = `${yParts.find(p => p.type==='year').value}-${yParts.find(p => p.type==='month').value}-${yParts.find(p => p.type==='day').value}`;
+        return rowDateStr === yStr;
+      }
+    } else if (hh < 6) {
+      if (shiftInfo.totalCurrentMinutes < 360) {
+        return rowDateStr === currentDateStr;
+      }
+    }
+    return false;
+  }
 }
 
 // Helper function to calculate Shift OEE % Performance & Details
 function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUptimeMin = 0) {
   const shiftInfo = getShiftStartInfo();
   const totalCurrentMinutes = shiftInfo.totalCurrentMinutes;
-  let shiftStartMin = shiftInfo.shiftStartHour * 60;
-  if (shiftInfo.shiftStartHour === 22 && totalCurrentMinutes < 360) {
+  let shiftStartMin = shiftInfo.startHour * 60;
+  if (shiftInfo.startHour === 22 && totalCurrentMinutes < 360) {
     shiftStartMin = -120; // 22:00 previous day
   }
 
@@ -571,17 +609,18 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
   let pastShiftUptimeMin = 0;
   try {
     const [historyRows] = await dbPool.query(
-      `SELECT * FROM \`${tableName}\` WHERE machine_ts >= ? ORDER BY machine_ts DESC`,
-      [currentShift.shiftStartMysqlDatetime]
+      `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 12`
     );
     if (historyRows && historyRows.length > 0) {
-      pastShiftUptimeMin = historyRows.reduce((acc, r) => {
+      const shiftRows = historyRows.filter(r => isRowInCurrentShift(r, currentShift));
+
+      pastShiftUptimeMin = shiftRows.reduce((acc, r) => {
         const val = r[oeeCol] !== undefined ? r[oeeCol] : r.oee;
         return acc + (Number(val) || 0);
       }, 0);
 
-      if (productVal === 0) {
-        const latestProd = historyRows[0][productCol] !== undefined ? historyRows[0][productCol] : historyRows[0].ct_product;
+      if (productVal === 0 && shiftRows.length > 0) {
+        const latestProd = shiftRows[0][productCol] !== undefined ? shiftRows[0][productCol] : shiftRows[0].ct_product;
         if (latestProd > 0) productVal = Number(latestProd);
       }
     }
