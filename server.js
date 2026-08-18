@@ -412,16 +412,70 @@ function scheduleNextSend() {
   }, msToNext);
 }
 
+// Helper function to calculate Shift OEE % Performance & Details
+function calculateShiftOeeDetails(productVal = 0) {
+  const now = new Date();
+  const wibString = now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' });
+  const wibTime = new Date(wibString);
+  const day = wibTime.getDay(); // 0 = Sun, 6 = Sat, 1..5 = Mon-Fri
+  const isSaturday = (day === 6);
+  const hour = wibTime.getHours();
+  const minute = wibTime.getMinutes();
+  const totalCurrentMinutes = (hour * 60) + minute;
+
+  const SPEED_DEFAULT = 42; // pcs per minute
+  let shiftName = '';
+  let shiftDurationMin = 480; // 8 hours default for Mon-Fri
+
+  if (isSaturday) {
+    shiftDurationMin = 300; // 5 hours = 300 mins
+    if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 660) {
+      shiftName = 'Shift 1 (Sabtu: 06.00 - 11.00)';
+    } else if (totalCurrentMinutes >= 660 && totalCurrentMinutes < 960) {
+      shiftName = 'Shift 2 (Sabtu: 11.00 - 16.00)';
+    } else if (totalCurrentMinutes >= 960 && totalCurrentMinutes < 1260) {
+      shiftName = 'Shift 3 (Sabtu: 16.00 - 21.00)';
+    } else {
+      shiftName = 'Luar Jam Kerja (Sabtu)';
+    }
+  } else {
+    shiftDurationMin = 480; // 8 hours default
+    if (totalCurrentMinutes >= 360 && totalCurrentMinutes < 840) {
+      shiftName = 'Shift 1 (06.00 - 14.00)';
+    } else if (totalCurrentMinutes >= 840 && totalCurrentMinutes < 1320) {
+      shiftName = 'Shift 2 (14.00 - 22.00)';
+    } else {
+      shiftName = 'Shift 3 (22.00 - 06.00)';
+    }
+  }
+
+  const maxShiftCapacity = SPEED_DEFAULT * shiftDurationMin;
+  const oeeShiftPct = maxShiftCapacity > 0 
+    ? Math.min(100, (productVal / maxShiftCapacity) * 100).toFixed(1)
+    : '0.0';
+
+  return {
+    shift_name: shiftName,
+    oee_shift_pct: parseFloat(oeeShiftPct),
+    max_shift_capacity: maxShiftCapacity,
+    speed_standard_ppm: SPEED_DEFAULT
+  };
+}
+
 // ═══════════════════════════════════════════════════════
 // ── OEE RETAIL API ENDPOINTS (FOR LARAVEL) ─────────────
 // ═══════════════════════════════════════════════════════
 
 // 1. GET Live Telemetry Status
 app.get(['/api/status', '/api/oee/status'], (req, res) => {
+  const productVal = latestCtProductD1 || 0;
+  const shiftInfo = calculateShiftOeeDetails(productVal);
+
   res.json({
     success: true,
     oee_d1: latestOeeD1,
     ct_productd1: latestCtProductD1,
+    ...shiftInfo,
     timestamp: new Date().toISOString()
   });
 });
