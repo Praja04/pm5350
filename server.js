@@ -709,6 +709,141 @@ app.get(['/api/history', '/api/oee/history', '/api/:machine/history', '/api/oee/
   }
 });
 
+// Helper: Determine which shift a DB row belongs to based on machine_ts hour
+function getShiftInfoForTimestamp(dateObj) {
+  const wibFormatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  });
+  const parts = wibFormatter.formatToParts(dateObj);
+  const getPart = (type) => parts.find(p => p.type === type)?.value || '00';
+
+  let hh = parseInt(getPart('hour'), 10);
+  if (hh === 24) hh = 0;
+  const dateStr = `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+
+  const wibDate = new Date(dateObj.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+  const dayOfWeek = wibDate.getDay();
+  const isSaturday = (dayOfWeek === 6);
+
+  let shiftNum, shiftLabel, shiftDate;
+
+  // jam "07.00" (hh=7) = data 06:00-07:00 = Shift 1
+  if (isSaturday) {
+    if (hh > 6 && hh <= 11) {
+      shiftNum = 1; shiftLabel = 'Shift 1 (06-11)'; shiftDate = dateStr;
+    } else if (hh > 11 && hh <= 16) {
+      shiftNum = 2; shiftLabel = 'Shift 2 (11-16)'; shiftDate = dateStr;
+    } else if (hh > 16 && hh <= 21) {
+      shiftNum = 3; shiftLabel = 'Shift 3 (16-21)'; shiftDate = dateStr;
+    } else {
+      shiftNum = 0; shiftLabel = 'Luar Jam Kerja'; shiftDate = dateStr;
+    }
+  } else {
+    if (hh > 6 && hh <= 14) {
+      shiftNum = 1; shiftLabel = 'Shift 1 (06-14)'; shiftDate = dateStr;
+    } else if (hh > 14 && hh <= 22) {
+      shiftNum = 2; shiftLabel = 'Shift 2 (14-22)'; shiftDate = dateStr;
+    } else if (hh > 22) {
+      shiftNum = 3; shiftLabel = 'Shift 3 (22-06)'; shiftDate = dateStr;
+    } else if (hh <= 6) {
+      shiftNum = 3; shiftLabel = 'Shift 3 (22-06)';
+      // Shift mulai kemarin
+      const yesterday = new Date(dateObj.getTime() - 86400000);
+      const yParts = wibFormatter.formatToParts(yesterday);
+      shiftDate = `${yParts.find(p=>p.type==='year').value}-${yParts.find(p=>p.type==='month').value}-${yParts.find(p=>p.type==='day').value}`;
+    }
+  }
+
+  return { shiftNum, shiftLabel, shiftDate, shiftKey: `${shiftDate}_S${shiftNum}` };
+}
+
+// 2b. GET Shift History OEE Summary
+app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:machine/shifts'], async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+  let rawMachine = req.params.machine || req.query.machine || 'D1';
+  let machineId = rawMachine.toUpperCase();
+  if (!machineId.startsWith('D')) machineId = 'D' + machineId;
+  const cleanLower = machineId.toLowerCase();
+  const tableName = `oee_${cleanLower}`;
+  const oeeCol = `oee_${cleanLower}`;
+  const productCol = `ct_product${cleanLower}`;
+
+  const SPEED = 42;
+  const LANES = 2;
+
+  try {
+    const [rawRows] = await dbPool.query(
+      `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 120`
+    );
+
+    // Group rows by shift
+    const shiftGroups = {};
+
+    for (const row of rawRows) {
+      let tsDate = (row.machine_ts instanceof Date) ? row.machine_ts : new Date(row.machine_ts);
+      if (isNaN(tsDate.getTime())) continue;
+
+      const info = getShiftInfoForTimestamp(tsDate);
+      if (info.shiftNum === 0) continue; // skip luar jam kerja
+
+      const key = info.shiftKey;
+      if (!shiftGroups[key]) {
+        shiftGroups[key] = {
+          shift_key: key,
+          shift_label: info.shiftLabel,
+          shift_date: info.shiftDate,
+          shift_num: info.shiftNum,
+          total_uptime: 0,
+          max_product: 0,
+          record_count: 0
+        };
+      }
+
+      const oeeVal = Number(row[oeeCol] !== undefined ? row[oeeCol] : (row.oee || 0));
+      const prodVal = Number(row[productCol] !== undefined ? row[productCol] : (row.ct_product || 0));
+
+      shiftGroups[key].total_uptime += oeeVal;
+      if (prodVal > shiftGroups[key].max_product) {
+        shiftGroups[key].max_product = prodVal;
+      }
+      shiftGroups[key].record_count++;
+    }
+
+    // Calculate OEE% and sort by date desc
+    const shifts = Object.values(shiftGroups)
+      .map(g => {
+        const capacity = g.total_uptime * SPEED * LANES;
+        const oee = capacity > 0 ? parseFloat(((g.max_product / capacity) * 100).toFixed(1)) : 0;
+        return {
+          shift_key: g.shift_key,
+          shift_label: g.shift_label,
+          shift_date: g.shift_date,
+          shift_num: g.shift_num,
+          total_uptime_min: g.total_uptime,
+          total_product: g.max_product,
+          oee_pct: oee,
+          record_count: g.record_count
+        };
+      })
+      .sort((a, b) => b.shift_key.localeCompare(a.shift_key))
+      .slice(0, 10); // Last 10 shifts
+
+    res.json({
+      success: true,
+      machine_id: machineId,
+      count: shifts.length,
+      shifts
+    });
+
+  } catch (err) {
+    console.error(`[OEE API] Error querying shifts from ${tableName}:`, err.message);
+    res.status(500).json({ success: false, machine_id: machineId, error: err.message, shifts: [] });
+  }
+});
+
 // 3. POST Trigger Reset Pulse (Supports ?machine=D1 or /api/:machine/reset)
 app.post(['/api/reset', '/api/oee/reset', '/api/:machine/reset', '/api/oee/:machine/reset'], (req, res) => {
   let rawMachine = req.params.machine || req.body?.machine || req.query.machine || 'D1';
