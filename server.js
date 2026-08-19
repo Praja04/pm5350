@@ -125,8 +125,30 @@ function sanitizeRealtime(d) {
   return d;
 }
 
-let latestOeeD1 = 0;
-let latestCtProductD1 = 0;
+// ═══════════════════════════════════════════════════════
+// ── MODULAR MACHINE TELEMETRY STORE (D1..D10, S1..S5, P1..P5)
+// ═══════════════════════════════════════════════════════
+const machineStateStore = {};
+
+function getMachineState(machineId) {
+  let key = (machineId || 'D1').toUpperCase().trim();
+  if (/^\d+$/.test(key)) key = 'D' + key;
+  if (!machineStateStore[key]) {
+    machineStateStore[key] = {
+      oee: 0,
+      product: 0,
+      lastUpdated: null
+    };
+  }
+  return machineStateStore[key];
+}
+
+function updateMachineState(machineId, oee, product) {
+  const state = getMachineState(machineId);
+  if (oee !== undefined && oee !== null) state.oee = parseInt(oee) || 0;
+  if (product !== undefined && product !== null) state.product = parseInt(product) || 0;
+  state.lastUpdated = new Date();
+}
 
 const mqttClient = mqtt.connect(MQTT_BROKER, {
   clientId: 'nodejs_pm5350_combo_' + Math.random().toString(16).substr(2, 8),
@@ -135,8 +157,18 @@ const mqttClient = mqtt.connect(MQTT_BROKER, {
 
 mqttClient.on('connect', () => {
   console.log('[MQTT] Terhubung ke broker:', MQTT_BROKER);
-  mqttClient.subscribe(['pm5350/#', 'OEE_D1', 'CT_PRODUCTD1'], (err) => {
-    if (!err) console.log('[MQTT] Subscribe ke pm5350/#, OEE_D1, & CT_PRODUCTD1 berhasil');
+  mqttClient.subscribe([
+    'pm5350/#',
+    'OEE_#',
+    'CT_PRODUCT#',
+    'OEE_D+',
+    'CT_PRODUCTD+',
+    'OEE_S+',
+    'CT_PRODUCTS+',
+    'OEE_P+',
+    'CT_PRODUCTP+'
+  ], (err) => {
+    if (!err) console.log('[MQTT] Subscribe ke modular OEE & CT_PRODUCT topics berhasil (D1..D10, S1..S5, P1..P5)');
   });
 });
 
@@ -149,33 +181,44 @@ mqttClient.on('reconnect', () => {
 });
 
 mqttClient.on('message', (topic, message) => {
-  // Handle OEE Telemetry Topics (Supports JSON Object, Nested d.CT_PRODUCTD1, and Array values [ 10402 ])
-  if (topic === 'OEE_D1' || topic.startsWith('OEE_')) {
+  // Dynamic Modular OEE Topic Parser (e.g., OEE_D1, OEE_D10, OEE_S1, OEE_P1)
+  const oeeMatch = topic.match(/^OEE_([A-Z0-9]+)$/i);
+  if (oeeMatch) {
+    const machineCode = oeeMatch[1].toUpperCase();
     try {
       const payload = JSON.parse(message.toString());
       const d = payload?.d || payload;
-      
-      const rawOee = d?.OEE_D1 ?? d?.oee_d1;
-      if (rawOee !== undefined && rawOee !== null) {
-        latestOeeD1 = Array.isArray(rawOee) ? (parseInt(rawOee[0]) || 0) : (parseInt(rawOee) || 0);
-      }
+      const rawOee = d?.[`OEE_${machineCode}`] ?? d?.[`oee_${machineCode.toLowerCase()}`] ?? d?.oee ?? d?.OEE;
+      const rawProduct = d?.[`CT_PRODUCT${machineCode}`] ?? d?.[`ct_product${machineCode.toLowerCase()}`] ?? d?.ct_product ?? d?.CT_PRODUCT;
 
-      const rawProduct = d?.CT_PRODUCTD1 ?? d?.ct_productd1;
+      if (rawOee !== undefined && rawOee !== null) {
+        const oeeVal = Array.isArray(rawOee) ? (parseInt(rawOee[0]) || 0) : (parseInt(rawOee) || 0);
+        updateMachineState(machineCode, oeeVal, undefined);
+      }
       if (rawProduct !== undefined && rawProduct !== null) {
-        latestCtProductD1 = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
+        const prodVal = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
+        updateMachineState(machineCode, undefined, prodVal);
       }
     } catch (e) {
-      latestOeeD1 = parseInt(message.toString()) || 0;
+      const val = parseInt(message.toString()) || 0;
+      updateMachineState(machineCode, val, undefined);
     }
     return;
   }
-  if (topic === 'CT_PRODUCTD1') {
+
+  // Dynamic Modular CT_PRODUCT Topic Parser (e.g., CT_PRODUCTD1, CT_PRODUCTD10, CT_PRODUCTS1)
+  const ctMatch = topic.match(/^CT_PRODUCT([A-Z0-9]+)$/i);
+  if (ctMatch) {
+    const machineCode = ctMatch[1].toUpperCase();
     try {
       const payload = JSON.parse(message.toString());
-      const rawProduct = payload?.d?.CT_PRODUCTD1 ?? payload?.CT_PRODUCTD1;
-      latestCtProductD1 = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
+      const d = payload?.d || payload;
+      const rawProduct = d?.[`CT_PRODUCT${machineCode}`] ?? d?.[`ct_product${machineCode.toLowerCase()}`] ?? d?.ct_product ?? payload;
+      const prodVal = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
+      updateMachineState(machineCode, undefined, prodVal);
     } catch (e) {
-      latestCtProductD1 = parseInt(message.toString()) || 0;
+      const val = parseInt(message.toString()) || 0;
+      updateMachineState(machineCode, undefined, val);
     }
     return;
   }
@@ -581,30 +624,22 @@ function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUp
 // ── OEE RETAIL API ENDPOINTS (FOR LARAVEL) ─────────────
 // ═══════════════════════════════════════════════════════
 
-const machineDataMap = {
-  D1: { oee: 0, product: 0 },
-  D10: { oee: 0, product: 0 }
-};
-
-// 1. GET Live Telemetry Status (Supports ?machine=D1 or /api/d1/status or /api/status)
+// 1. GET Live Telemetry Status (Supports ?machine=D1/D10 or /api/d1/status or /api/status)
 app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:machine/status'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
   let rawMachine = req.params.machine || req.query.machine || 'D1';
-  let machineId = rawMachine.toUpperCase();
-  if (!machineId.startsWith('D')) machineId = 'D' + machineId;
+  let machineId = rawMachine.toUpperCase().trim();
+  if (/^\d+$/.test(machineId)) machineId = 'D' + machineId;
+
   const cleanLower = machineId.toLowerCase();
   const tableName = `oee_${cleanLower}`;
   const oeeCol = `oee_${cleanLower}`;
   const productCol = `ct_product${cleanLower}`;
 
-  const machineData = machineDataMap[machineId] || {
-    oee: (machineId === 'D1' ? latestOeeD1 : 0),
-    product: (machineId === 'D1' ? latestCtProductD1 : 0)
-  };
-
-  const oeeVal = (machineId === 'D1' && latestOeeD1 > 0) ? latestOeeD1 : (machineData.oee || 0);
-  let productVal = (machineId === 'D1' && latestCtProductD1 > 0) ? latestCtProductD1 : (machineData.product || 0);
+  const state = getMachineState(machineId);
+  let oeeVal = state.oee || 0;
+  let productVal = state.product || 0;
 
   // Sum past shift uptime for current shift from database
   // NOTE: CT_PRODUCT is CUMULATIVE (not reset hourly), so productVal from MQTT is already the total shift product
@@ -632,19 +667,80 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
     // skip if table doesn't exist yet
   }
 
-  // productVal sudah kumulatif shift (tidak perlu dijumlah dari DB)
   const shiftInfo = calculateShiftOeeDetails(productVal, oeeVal, pastShiftUptimeMin);
 
   res.json({
     success: true,
     machine_id: machineId,
-    machine_name: `Mesin Retail ${machineId}`,
+    machine_name: `Mesin ${machineId}`,
     oee: oeeVal,
     product: productVal,
     [`oee_${cleanLower}`]: oeeVal,
     [`ct_product${cleanLower}`]: productVal,
     ...shiftInfo,
     timestamp: new Date().toISOString()
+  });
+});
+
+// 1b. GET All Machines Live Telemetry Status (Supports all 20 machines: D1-D10, S1-S5, P1-P5)
+app.get('/api/all-status', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+  const machineList = [];
+  for (let i = 1; i <= 10; i++) machineList.push(`D${i}`);
+  for (let i = 1; i <= 5; i++) machineList.push(`S${i}`);
+  for (let i = 1; i <= 5; i++) machineList.push(`P${i}`);
+
+  const results = {};
+  const currentShift = getShiftStartInfo();
+
+  for (const code of machineList) {
+    const cleanLower = code.toLowerCase();
+    const tableName = `oee_${cleanLower}`;
+    const oeeCol = `oee_${cleanLower}`;
+    const productCol = `ct_product${cleanLower}`;
+
+    const state = getMachineState(code);
+    let oeeVal = state.oee || 0;
+    let productVal = state.product || 0;
+    let pastShiftUptimeMin = 0;
+
+    try {
+      const [historyRows] = await dbPool.query(
+        `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 12`
+      );
+      if (historyRows && historyRows.length > 0) {
+        const shiftRows = historyRows.filter(r => isRowInCurrentShift(r, currentShift));
+        pastShiftUptimeMin = shiftRows.reduce((acc, r) => {
+          const val = r[oeeCol] !== undefined ? r[oeeCol] : r.oee;
+          return acc + (Number(val) || 0);
+        }, 0);
+
+        if (productVal === 0 && shiftRows.length > 0) {
+          const latestProd = shiftRows[0][productCol] !== undefined ? shiftRows[0][productCol] : shiftRows[0].ct_product;
+          if (latestProd > 0) productVal = Number(latestProd);
+        }
+      }
+    } catch (e) {
+      // Table may not exist yet
+    }
+
+    const shiftInfo = calculateShiftOeeDetails(productVal, oeeVal, pastShiftUptimeMin);
+    const hasData = (productVal > 0 || oeeVal > 0 || pastShiftUptimeMin > 0);
+
+    results[code] = {
+      machine_id: code,
+      has_data: hasData,
+      oee: oeeVal,
+      product: productVal,
+      ...shiftInfo
+    };
+  }
+
+  res.json({
+    success: true,
+    timestamp: new Date().toISOString(),
+    machines: results
   });
 });
 
