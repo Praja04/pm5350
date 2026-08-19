@@ -759,7 +759,7 @@ function getShiftInfoForTimestamp(dateObj) {
   return { shiftNum, shiftLabel, shiftDate, shiftKey: `${shiftDate}_S${shiftNum}` };
 }
 
-// 2b. GET Shift History OEE Summary
+// 2b. GET Shift History OEE Summary (Supports ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD, defaults to 7 days)
 app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:machine/shifts'], async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
@@ -774,9 +774,30 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
   const SPEED = 42;
   const LANES = 2;
 
+  const startDateParam = req.query.start_date;
+  const endDateParam = req.query.end_date;
+
+  let sqlParams = [];
+  let whereClause = '';
+
+  if (startDateParam && endDateParam) {
+    whereClause = ` WHERE DATE(machine_ts) BETWEEN ? AND ? `;
+    sqlParams.push(startDateParam, endDateParam);
+  } else if (startDateParam) {
+    whereClause = ` WHERE DATE(machine_ts) >= ? `;
+    sqlParams.push(startDateParam);
+  } else if (endDateParam) {
+    whereClause = ` WHERE DATE(machine_ts) <= ? `;
+    sqlParams.push(endDateParam);
+  } else {
+    // Default: 7 hari sebelumnya dari hari ini
+    whereClause = ` WHERE machine_ts >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) `;
+  }
+
   try {
     const [rawRows] = await dbPool.query(
-      `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 120`
+      `SELECT * FROM \`${tableName}\` ${whereClause} ORDER BY machine_ts DESC`,
+      sqlParams
     );
 
     // Group rows by shift
@@ -838,12 +859,12 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
           hourly_rows: g.rows
         };
       })
-      .sort((a, b) => b.shift_key.localeCompare(a.shift_key))
-      .slice(0, 10); // Last 10 shifts
+      .sort((a, b) => b.shift_key.localeCompare(a.shift_key));
 
     res.json({
       success: true,
       machine_id: machineId,
+      filter: { start_date: startDateParam || null, end_date: endDateParam || null },
       count: shifts.length,
       shifts
     });
