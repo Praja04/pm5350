@@ -552,15 +552,16 @@ function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUp
     shiftStartMin = -120; // 22:00 previous day
   }
 
-  const SPEED_DEFAULT = 42; // pcs per minute
+  const SPEED_DEFAULT = 42; // cycles per minute
+  const LANE_MULTIPLIER = 2; // mesin 2 jalur: 1 cycle = 2 pcs
   const shiftName = shiftInfo.shiftName;
 
   const elapsedShiftMin = Math.max(1, totalCurrentMinutes - shiftStartMin);
   const totalUptimeShiftMin = currentOeeVal + pastShiftUptimeMin;
   const downtimeShiftMin = Math.max(0, elapsedShiftMin - totalUptimeShiftMin);
 
-  // OEE Shift % = Total Counter / (Speed Standard × Uptime Shift) × 100
-  const maxUptimeCapacity = totalUptimeShiftMin * SPEED_DEFAULT;
+  // OEE Shift % = Total Counter / (Speed × Uptime × Lane Multiplier) × 100
+  const maxUptimeCapacity = totalUptimeShiftMin * SPEED_DEFAULT * LANE_MULTIPLIER;
   const oeeShiftPct = (maxUptimeCapacity > 0)
     ? ((productVal / maxUptimeCapacity) * 100).toFixed(1)
     : '0.0';
@@ -571,7 +572,7 @@ function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUp
     shift_elapsed_min: elapsedShiftMin,
     shift_uptime_min: totalUptimeShiftMin,
     shift_downtime_min: downtimeShiftMin,
-    max_shift_capacity: SPEED_DEFAULT * 480,
+    max_shift_capacity: SPEED_DEFAULT * LANE_MULTIPLIER * 480,
     speed_standard_ppm: SPEED_DEFAULT
   };
 }
