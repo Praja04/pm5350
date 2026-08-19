@@ -518,11 +518,14 @@ function isRowInCurrentShift(row, shiftInfo) {
   const rowDateStr = `${yyyy}-${mm}-${dd}`;
   const { startHour, endHour, currentDateStr } = shiftInfo;
 
+  // jam "06.00" = data dari 05:00-06:00, jadi row dengan hour=6 BUKAN bagian Shift 1 (06:00-14:00)
+  // Gunakan hh > startHour && hh <= endHour agar jam "07.00" (06:00-07:00) masuk, jam "06.00" tidak
   if (startHour < endHour) {
-    return (rowDateStr === currentDateStr && hh >= startHour && hh < endHour);
+    return (rowDateStr === currentDateStr && hh > startHour && hh <= endHour);
   } else {
     // Shift 3 crossing midnight (22:00 - 06:00)
-    if (hh >= 22) {
+    // jam "23.00" = data 22:00-23:00 (Shift 3), jam "22.00" = data 21:00-22:00 (Shift 2, exclude)
+    if (hh > 22) {
       if (shiftInfo.totalCurrentMinutes >= 1320) {
         return rowDateStr === currentDateStr;
       } else {
@@ -531,7 +534,7 @@ function isRowInCurrentShift(row, shiftInfo) {
         const yStr = `${yParts.find(p => p.type==='year').value}-${yParts.find(p => p.type==='month').value}-${yParts.find(p => p.type==='day').value}`;
         return rowDateStr === yStr;
       }
-    } else if (hh < 6) {
+    } else if (hh <= 6) {
       if (shiftInfo.totalCurrentMinutes < 360) {
         return rowDateStr === currentDateStr;
       }
@@ -556,13 +559,11 @@ function calculateShiftOeeDetails(productVal = 0, currentOeeVal = 0, pastShiftUp
   const totalUptimeShiftMin = currentOeeVal + pastShiftUptimeMin;
   const downtimeShiftMin = Math.max(0, elapsedShiftMin - totalUptimeShiftMin);
 
-  // True OEE Shift % = Availability (Uptime / Elapsed) * Performance (Output / (Uptime * 42))
-  const availabilityRatio = Math.min(1.0, totalUptimeShiftMin / elapsedShiftMin);
+  // OEE Shift % = Total Counter / (Speed Standard × Uptime Shift) × 100
   const maxUptimeCapacity = totalUptimeShiftMin * SPEED_DEFAULT;
-  const performanceRatio = (productVal > 0 && maxUptimeCapacity > 0) 
-    ? Math.min(1.0, productVal / maxUptimeCapacity) 
-    : 1.0;
-  const oeeShiftPct = (availabilityRatio * performanceRatio * 100).toFixed(1);
+  const oeeShiftPct = (maxUptimeCapacity > 0)
+    ? ((productVal / maxUptimeCapacity) * 100).toFixed(1)
+    : '0.0';
 
   return {
     shift_name: shiftName,
