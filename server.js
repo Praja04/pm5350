@@ -682,14 +682,12 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
   });
 });
 
-// 1b. GET All Machines Live Telemetry Status (Supports all 20 machines: D1-D10, S1-S5, P1-P5)
+// 1b. GET All Machines Live Telemetry Status (Supports all 20 machines: D1-D20)
 app.get('/api/all-status', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
   const machineList = [];
-  for (let i = 1; i <= 10; i++) machineList.push(`D${i}`);
-  for (let i = 1; i <= 5; i++) machineList.push(`S${i}`);
-  for (let i = 1; i <= 5; i++) machineList.push(`P${i}`);
+  for (let i = 1; i <= 20; i++) machineList.push(`D${i}`);
 
   const results = {};
   const currentShift = getShiftStartInfo();
