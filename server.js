@@ -605,9 +605,10 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
   const oeeVal = (machineId === 'D1' && latestOeeD1 > 0) ? latestOeeD1 : (machineData.oee || 0);
   let productVal = (machineId === 'D1' && latestCtProductD1 > 0) ? latestCtProductD1 : (machineData.product || 0);
 
-  // Sum past shift uptime and fallback product counter ONLY for current shift from database
+  // Sum past shift uptime AND product counter for current shift from database
   const currentShift = getShiftStartInfo();
   let pastShiftUptimeMin = 0;
+  let pastShiftProductTotal = 0;
   try {
     const [historyRows] = await dbPool.query(
       `SELECT * FROM \`${tableName}\` ORDER BY machine_ts DESC LIMIT 12`
@@ -620,6 +621,12 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
         return acc + (Number(val) || 0);
       }, 0);
 
+      // Akumulasi product dari jam-jam sebelumnya dalam shift
+      pastShiftProductTotal = shiftRows.reduce((acc, r) => {
+        const val = r[productCol] !== undefined ? r[productCol] : r.ct_product;
+        return acc + (Number(val) || 0);
+      }, 0);
+
       if (productVal === 0 && shiftRows.length > 0) {
         const latestProd = shiftRows[0][productCol] !== undefined ? shiftRows[0][productCol] : shiftRows[0].ct_product;
         if (latestProd > 0) productVal = Number(latestProd);
@@ -629,7 +636,9 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
     // skip if table doesn't exist yet
   }
 
-  const shiftInfo = calculateShiftOeeDetails(productVal, oeeVal, pastShiftUptimeMin);
+  // Total product shift = counter jam berjalan + akumulasi jam sebelumnya
+  const totalShiftProduct = productVal + pastShiftProductTotal;
+  const shiftInfo = calculateShiftOeeDetails(totalShiftProduct, oeeVal, pastShiftUptimeMin);
 
   res.json({
     success: true,
@@ -639,6 +648,7 @@ app.get(['/api/status', '/api/oee/status', '/api/:machine/status', '/api/oee/:ma
     product: productVal,
     [`oee_${cleanLower}`]: oeeVal,
     [`ct_product${cleanLower}`]: productVal,
+    shift_product_total: totalShiftProduct,
     ...shiftInfo,
     timestamp: new Date().toISOString()
   });
