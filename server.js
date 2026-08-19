@@ -798,7 +798,8 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
           shift_num: info.shiftNum,
           total_uptime: 0,
           max_product: 0,
-          record_count: 0
+          record_count: 0,
+          rows: []
         };
       }
 
@@ -810,6 +811,14 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
         shiftGroups[key].max_product = prodVal;
       }
       shiftGroups[key].record_count++;
+      shiftGroups[key].rows.push({
+        id: row.id,
+        jam: row.jam,
+        oee: oeeVal,
+        ct_product: prodVal,
+        machine_ts: row.machine_ts,
+        is_stop_shift: row.is_stop_shift || 0
+      });
     }
 
     // Calculate OEE% and sort by date desc
@@ -825,7 +834,8 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
           total_uptime_min: g.total_uptime,
           total_product: g.max_product,
           oee_pct: oee,
-          record_count: g.record_count
+          record_count: g.record_count,
+          hourly_rows: g.rows
         };
       })
       .sort((a, b) => b.shift_key.localeCompare(a.shift_key))
