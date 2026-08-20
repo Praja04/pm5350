@@ -150,6 +150,48 @@ function updateMachineState(machineId, oee, product) {
   state.lastUpdated = new Date();
 }
 
+function extractNumericValue(payloadStr, machineCode, targetType) {
+  const codeLower = machineCode.toLowerCase();
+  const codeUpper = machineCode.toUpperCase();
+  const trimmed = (payloadStr || '').toString().trim();
+
+  // 1. Direct Numeric string (e.g. "45", "1500")
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Math.floor(parseFloat(trimmed));
+  }
+
+  // 2. JSON Payload
+  try {
+    const payload = JSON.parse(trimmed);
+    if (typeof payload === 'number') return Math.floor(payload);
+    
+    const d = payload?.d || payload;
+    if (typeof d === 'number') return Math.floor(d);
+
+    if (typeof d === 'object' && d !== null) {
+      if (targetType === 'oee') {
+        const val = d[`OEE_${codeUpper}`] ?? d[`oee_${codeLower}`] ?? d.oee ?? d.OEE ?? d.value ?? d.val ?? d.data;
+        if (val !== undefined && val !== null) {
+          return Array.isArray(val) ? (parseInt(val[0]) || 0) : (parseInt(val) || 0);
+        }
+      } else {
+        const val = d[`CT_PRODUCT${codeUpper}`] ?? d[`ct_product${codeLower}`] ?? d.ct_product ?? d.CT_PRODUCT ?? d.product ?? d.count ?? d.qty ?? d.value ?? d.val ?? d.data;
+        if (val !== undefined && val !== null) {
+          return Array.isArray(val) ? (parseInt(val[0]) || 0) : (parseInt(val) || 0);
+        }
+      }
+
+      // Fallback: Check all keys for first numeric value
+      for (const key of Object.keys(d)) {
+        if (typeof d[key] === 'number') return Math.floor(d[key]);
+        if (typeof d[key] === 'string' && /^\d+$/.test(d[key])) return parseInt(d[key]);
+      }
+    }
+  } catch (e) {}
+
+  return parseInt(trimmed) || 0;
+}
+
 const mqttClient = mqtt.connect(MQTT_BROKER, {
   clientId: 'nodejs_pm5350_combo_' + Math.random().toString(16).substr(2, 8),
   reconnectPeriod: 3000,
@@ -157,18 +199,18 @@ const mqttClient = mqtt.connect(MQTT_BROKER, {
 
 mqttClient.on('connect', () => {
   console.log('[MQTT] Terhubung ke broker:', MQTT_BROKER);
-  mqttClient.subscribe([
-    'pm5350/#',
-    'OEE_#',
-    'CT_PRODUCT#',
-    'OEE_D+',
-    'CT_PRODUCTD+',
-    'OEE_S+',
-    'CT_PRODUCTS+',
-    'OEE_P+',
-    'CT_PRODUCTP+'
-  ], (err) => {
-    if (!err) console.log('[MQTT] Subscribe ke modular OEE & CT_PRODUCT topics berhasil (D1..D10, S1..S5, P1..P5)');
+
+  // Generate explicit MQTT spec compliant topic list
+  const subTopics = ['pm5350/#', 'OEE/#', 'CT_PRODUCT/#', 'oee/#', 'ct_product/#'];
+  for (let i = 1; i <= 20; i++) {
+    subTopics.push(`OEE_D${i}`, `CT_PRODUCTD${i}`, `OEE_D${i}/#`, `CT_PRODUCTD${i}/#`, `OEE/D${i}`, `CT_PRODUCT/D${i}`);
+  }
+  for (let i = 1; i <= 5; i++) {
+    subTopics.push(`OEE_S${i}`, `CT_PRODUCTS${i}`, `OEE_P${i}`, `CT_PRODUCTP${i}`);
+  }
+
+  mqttClient.subscribe(subTopics, (err) => {
+    if (!err) console.log('[MQTT] Subscribe ke modular OEE & CT_PRODUCT topics berhasil (D1..D20, S1..S5, P1..P5)');
   });
 });
 
@@ -181,45 +223,24 @@ mqttClient.on('reconnect', () => {
 });
 
 mqttClient.on('message', (topic, message) => {
-  // Dynamic Modular OEE Topic Parser (e.g., OEE_D1, OEE_D10, OEE_S1, OEE_P1)
-  const oeeMatch = topic.match(/^OEE_([A-Z0-9]+)$/i);
-  if (oeeMatch) {
+  // Dynamic Modular OEE Topic Parser (e.g. OEE_D1, OEE_D10, OEE/D10, oee_d10)
+  const oeeMatch = topic.match(/^(?:OEE[_\/]|oee[_\/])([A-Z0-9]+)$/i) || topic.match(/^OEE_?([A-Z0-9]+)$/i);
+  if (oeeMatch && !topic.startsWith('pm5350/')) {
     const machineCode = oeeMatch[1].toUpperCase();
-    try {
-      const payload = JSON.parse(message.toString());
-      const d = payload?.d || payload;
-      const rawOee = d?.[`OEE_${machineCode}`] ?? d?.[`oee_${machineCode.toLowerCase()}`] ?? d?.oee ?? d?.OEE;
-      const rawProduct = d?.[`CT_PRODUCT${machineCode}`] ?? d?.[`ct_product${machineCode.toLowerCase()}`] ?? d?.ct_product ?? d?.CT_PRODUCT;
+    const rawStr = message.toString();
+    const oeeVal = extractNumericValue(rawStr, machineCode, 'oee');
+    const prodVal = extractNumericValue(rawStr, machineCode, 'product');
 
-      if (rawOee !== undefined && rawOee !== null) {
-        const oeeVal = Array.isArray(rawOee) ? (parseInt(rawOee[0]) || 0) : (parseInt(rawOee) || 0);
-        updateMachineState(machineCode, oeeVal, undefined);
-      }
-      if (rawProduct !== undefined && rawProduct !== null) {
-        const prodVal = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
-        updateMachineState(machineCode, undefined, prodVal);
-      }
-    } catch (e) {
-      const val = parseInt(message.toString()) || 0;
-      updateMachineState(machineCode, val, undefined);
-    }
+    updateMachineState(machineCode, oeeVal, (prodVal > 0 ? prodVal : undefined));
     return;
   }
 
-  // Dynamic Modular CT_PRODUCT Topic Parser (e.g., CT_PRODUCTD1, CT_PRODUCTD10, CT_PRODUCTS1)
-  const ctMatch = topic.match(/^CT_PRODUCT([A-Z0-9]+)$/i);
-  if (ctMatch) {
+  // Dynamic Modular CT_PRODUCT Topic Parser (e.g. CT_PRODUCTD1, CT_PRODUCTD10, CT_PRODUCT/D10)
+  const ctMatch = topic.match(/^(?:CT_PRODUCT[_\/]?|ct_product[_\/]?)([A-Z0-9]+)$/i);
+  if (ctMatch && !topic.startsWith('pm5350/')) {
     const machineCode = ctMatch[1].toUpperCase();
-    try {
-      const payload = JSON.parse(message.toString());
-      const d = payload?.d || payload;
-      const rawProduct = d?.[`CT_PRODUCT${machineCode}`] ?? d?.[`ct_product${machineCode.toLowerCase()}`] ?? d?.ct_product ?? payload;
-      const prodVal = Array.isArray(rawProduct) ? (parseInt(rawProduct[0]) || 0) : (parseInt(rawProduct) || 0);
-      updateMachineState(machineCode, undefined, prodVal);
-    } catch (e) {
-      const val = parseInt(message.toString()) || 0;
-      updateMachineState(machineCode, undefined, val);
-    }
+    const prodVal = extractNumericValue(message.toString(), machineCode, 'product');
+    updateMachineState(machineCode, undefined, prodVal);
     return;
   }
 
