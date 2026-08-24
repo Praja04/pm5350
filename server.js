@@ -783,13 +783,16 @@ app.get(['/api/history', '/api/oee/history', '/api/:machine/history', '/api/oee/
     const rows = rawRows.map(r => {
       const oeeVal = r[oeeCol] !== undefined ? r[oeeCol] : (r.oee || 0);
       const prodVal = r[productCol] !== undefined ? r[productCol] : (r.ct_product || 0);
+      const downtimeVal = r.downtime !== undefined ? r.downtime : Math.max(0, 60 - oeeVal);
       return {
         id: r.id,
         oee: oeeVal,
+        downtime: downtimeVal,
         ct_product: prodVal,
         [oeeCol]: oeeVal,
         [productCol]: prodVal,
         jam: r.jam,
+        status: r.status || 'NORMAL',
         machine_ts: r.machine_ts,
         saved_at: r.saved_at,
         is_stop_shift: r.is_stop_shift !== undefined ? r.is_stop_shift : 0
@@ -951,11 +954,30 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
         id: row.id,
         jam: row.jam,
         oee: oeeVal,
+        downtime: row.downtime !== undefined ? row.downtime : Math.max(0, 60 - oeeVal),
         ct_product: prodVal,
+        status: row.status || 'NORMAL',
         machine_ts: row.machine_ts,
         is_stop_shift: row.is_stop_shift || 0
       });
     }
+
+    // Process shift rows: sort chronologically & calculate net_ct_product (delta per hour)
+    Object.values(shiftGroups).forEach(g => {
+      g.rows.sort((a, b) => new Date(a.machine_ts || 0) - new Date(b.machine_ts || 0) || a.id - b.id);
+      let prevCumulative = 0;
+      g.rows.forEach(r => {
+        const rawProd = Number(r.ct_product || 0);
+        let netProd = 0;
+        if (rawProd < prevCumulative) {
+          netProd = rawProd;
+        } else {
+          netProd = rawProd - prevCumulative;
+        }
+        r.net_ct_product = netProd;
+        prevCumulative = rawProd;
+      });
+    });
 
     // Calculate OEE% and sort by date desc
     const shifts = Object.values(shiftGroups)
@@ -987,6 +1009,37 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
   } catch (err) {
     console.error(`[OEE API] Error querying shifts from ${tableName}:`, err.message);
     res.status(500).json({ success: false, machine_id: machineId, error: err.message, shifts: [] });
+  }
+});
+
+/**
+ * GET /api/:machine/downtimes
+ * Returns recent downtime event intervals for a specific machine from downtime_events table
+ */
+app.get(['/api/:machine/downtimes', '/api/oee/:machine/downtimes'], async (req, res) => {
+  try {
+    const rawMachineId = req.params.machine.toUpperCase();
+    const machineConfig = machinesConfig.find(m => m.id.toUpperCase() === rawMachineId);
+    const machineId = machineConfig ? machineConfig.id : rawMachineId;
+
+    const [rows] = await pool.query(
+      `SELECT id, machine_id, start_time, end_time, duration_minutes, jam_start, status, created_at
+       FROM downtime_events
+       WHERE machine_id = ?
+       ORDER BY start_time DESC
+       LIMIT 50`,
+      [machineId]
+    );
+
+    res.json({
+      success: true,
+      machine_id: machineId,
+      count: rows.length,
+      downtimes: rows
+    });
+  } catch (err) {
+    console.error(`[OEE API] Error fetching downtimes for ${req.params.machine}:`, err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
