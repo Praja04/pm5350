@@ -29,7 +29,7 @@ const API_HOST = '10.11.10.130';
 const API_PORT = 8090;
 const API_PATH = '/api/utility/capbank/machine-data/store';
 const CAP_TYPE = process.env.CAP_TYPE || 'cap3';
-const ENABLED_MACHINES = (process.env.ENABLED_MACHINES || 'D1,D10').split(',').map(s => s.trim().toUpperCase());
+const ENABLED_MACHINES = (process.env.ENABLED_MACHINES || 'D1,D10,D4').split(',').map(s => s.trim().toUpperCase());
 
 // ═══════════════════════════════════════════════════════
 // ── EXPRESS + SOCKET.IO ───────────────────────────────
