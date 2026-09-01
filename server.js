@@ -29,6 +29,7 @@ const API_HOST = '10.11.10.130';
 const API_PORT = 8090;
 const API_PATH = '/api/utility/capbank/machine-data/store';
 const CAP_TYPE = process.env.CAP_TYPE || 'cap3';
+const ENABLED_MACHINES = (process.env.ENABLED_MACHINES || 'D1,D10').split(',').map(s => s.trim().toUpperCase());
 
 // ═══════════════════════════════════════════════════════
 // ── EXPRESS + SOCKET.IO ───────────────────────────────
@@ -745,13 +746,15 @@ app.get('/api/all-status', async (req, res) => {
     }
 
     const shiftInfo = calculateShiftOeeDetails(productVal, oeeVal, pastShiftUptimeMin);
-    const hasData = (productVal > 0 || oeeVal > 0 || pastShiftUptimeMin > 0);
+    const isEnabled = ENABLED_MACHINES.includes(code);
+    const hasData = isEnabled && (productVal > 0 || oeeVal > 0 || pastShiftUptimeMin > 0);
 
     results[code] = {
       machine_id: code,
+      is_enabled: isEnabled,
       has_data: hasData,
-      oee: oeeVal,
-      product: productVal,
+      oee: isEnabled ? oeeVal : 0,
+      product: isEnabled ? productVal : 0,
       ...shiftInfo
     };
   }
