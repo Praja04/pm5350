@@ -70,32 +70,33 @@ function sanitizeRealtime(d) {
     return num;
   }
 
-  if (d.freq !== undefined) d.freq = cleanNum(d.freq, 40, 60, 0);
+  if (d.freq !== undefined) d.freq = cleanNum(d.freq, 0, 1000, 0);
 
   if (d.pf) {
-    if (d.pf.PFtot !== undefined) d.pf.PFtot = cleanNum(d.pf.PFtot, -1, 1, 0);
-    if (d.pf.PFa !== undefined) d.pf.PFa = cleanNum(d.pf.PFa, -1, 1, 0);
-    if (d.pf.PFb !== undefined) d.pf.PFb = cleanNum(d.pf.PFb, -1, 1, 0);
-    if (d.pf.PFc !== undefined) d.pf.PFc = cleanNum(d.pf.PFc, -1, 1, 0);
+    if (d.pf.PFtot !== undefined) d.pf.PFtot = cleanNum(d.pf.PFtot, -10000, 10000, 0);
+    if (d.pf.PFa !== undefined) d.pf.PFa = cleanNum(d.pf.PFa, -10000, 10000, 0);
+    if (d.pf.PFb !== undefined) d.pf.PFb = cleanNum(d.pf.PFb, -10000, 10000, 0);
+    if (d.pf.PFc !== undefined) d.pf.PFc = cleanNum(d.pf.PFc, -10000, 10000, 0);
   }
 
   if (d.cosphi) {
-    if (d.cosphi.dPFtot !== undefined) d.cosphi.dPFtot = cleanNum(d.cosphi.dPFtot, -1, 1, 0);
-    if (d.cosphi.dPFa !== undefined) d.cosphi.dPFa = cleanNum(d.cosphi.dPFa, -1, 1, 0);
-    if (d.cosphi.dPFb !== undefined) d.cosphi.dPFb = cleanNum(d.cosphi.dPFb, -1, 1, 0);
-    if (d.cosphi.dPFc !== undefined) d.cosphi.dPFc = cleanNum(d.cosphi.dPFc, -1, 1, 0);
+    if (d.cosphi.dPFtot !== undefined) d.cosphi.dPFtot = cleanNum(d.cosphi.dPFtot, -10000, 10000, 0);
+    if (d.cosphi.dPFa !== undefined) d.cosphi.dPFa = cleanNum(d.cosphi.dPFa, -10000, 10000, 0);
+    if (d.cosphi.dPFb !== undefined) d.cosphi.dPFb = cleanNum(d.cosphi.dPFb, -10000, 10000, 0);
+    if (d.cosphi.dPFc !== undefined) d.cosphi.dPFc = cleanNum(d.cosphi.dPFc, -10000, 10000, 0);
   }
 
   if (d.thd_i) {
-    if (d.thd_i.Ia !== undefined) d.thd_i.Ia = cleanNum(d.thd_i.Ia, 0, 1000, 0);
-    if (d.thd_i.Ib !== undefined) d.thd_i.Ib = cleanNum(d.thd_i.Ib, 0, 1000, 0);
-    if (d.thd_i.Ic !== undefined) d.thd_i.Ic = cleanNum(d.thd_i.Ic, 0, 1000, 0);
+    if (d.thd_i.Ia !== undefined) d.thd_i.Ia = cleanNum(d.thd_i.Ia, 0, 10000, 0);
+    if (d.thd_i.Ib !== undefined) d.thd_i.Ib = cleanNum(d.thd_i.Ib, 0, 10000, 0);
+    if (d.thd_i.Ic !== undefined) d.thd_i.Ic = cleanNum(d.thd_i.Ic, 0, 10000, 0);
   }
 
   if (d.thd_v) {
-    if (d.thd_v.Van !== undefined) d.thd_v.Van = cleanNum(d.thd_v.Van, 0, 1000, 0);
-    if (d.thd_v.Vbn !== undefined) d.thd_v.Vbn = cleanNum(d.thd_v.Vbn, 0, 1000, 0);
-    if (d.thd_v.Vcn !== undefined) d.thd_v.Vcn = cleanNum(d.thd_v.Vcn, 0, 1000, 0);
+    if (d.thd_v.Vll !== undefined) d.thd_v.Vll = cleanNum(d.thd_v.Vll, 0, 10000, 0);
+    if (d.thd_v.Van !== undefined) d.thd_v.Van = cleanNum(d.thd_v.Van, 0, 10000, 0);
+    if (d.thd_v.Vbn !== undefined) d.thd_v.Vbn = cleanNum(d.thd_v.Vbn, 0, 10000, 0);
+    if (d.thd_v.Vcn !== undefined) d.thd_v.Vcn = cleanNum(d.thd_v.Vcn, 0, 10000, 0);
   }
 
   const limit = 1000000;
@@ -362,6 +363,11 @@ function sendHTTP(payload) {
 }
 
 function buildPayload(tanggal, capType, current) {
+  const pfVal = getVal(latestRealtime, 'pf.PFtot', 4) || getVal(latestRealtime, 'pf.PFa', 4);
+  const cosphiVal = getVal(latestRealtime, 'cosphi.dPFtot', 4) || getVal(latestRealtime, 'cosphi.dPFa', 4);
+  const thdIVal = getVal(latestRealtime, 'thd_i.Ia', 2);
+  const thdVVal = getVal(latestRealtime, 'thd_v.Vll', 2) || getVal(latestRealtime, 'thd_v.Van', 2);
+
   return {
     tanggal: tanggal,
     cap_type: capType,
@@ -386,29 +392,29 @@ function buildPayload(tanggal, capType, current) {
     },
 
     pf: {
-      PFa: getVal(latestRealtime, 'pf.PFa', 4),
-      PFb: getVal(latestRealtime, 'pf.PFb', 4),
-      PFc: getVal(latestRealtime, 'pf.PFc', 4)
+      PFa: pfVal,
+      PFb: 0,
+      PFc: 0
     },
 
     cosphi: {
-      dPFa: getVal(latestRealtime, 'cosphi.dPFa', 4),
-      dPFb: getVal(latestRealtime, 'cosphi.dPFb', 4),
-      dPFc: getVal(latestRealtime, 'cosphi.dPFc', 4)
+      dPFa: cosphiVal,
+      dPFb: 0,
+      dPFc: 0
     },
 
     freq: getVal(latestRealtime, 'freq'),
 
     thd_i: {
-      Ia: getVal(latestRealtime, 'thd_i.Ia'),
-      Ib: getVal(latestRealtime, 'thd_i.Ib'),
-      Ic: getVal(latestRealtime, 'thd_i.Ic')
+      Ia: thdIVal,
+      Ib: 0,
+      Ic: 0
     },
 
     thd_v: {
-      Van: getVal(latestRealtime, 'thd_v.Van'),
-      Vbn: getVal(latestRealtime, 'thd_v.Vbn'),
-      Vcn: getVal(latestRealtime, 'thd_v.Vcn')
+      Van: thdVVal,
+      Vbn: 0,
+      Vcn: 0
     }
   };
 }

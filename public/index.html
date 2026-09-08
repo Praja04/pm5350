@@ -364,6 +364,28 @@
       font-size: 8px; color: var(--text-dim); margin-left: 2px;
     }
 
+    .card-single-body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      padding: 6px 0;
+    }
+
+    .card-single-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      transition: color 0.4s ease;
+    }
+    .card-single-val.flash { color: var(--cyan); }
+
+    .card.pf .card-single-val { color: var(--blue); }
+    .card.cosphi .card-single-val { color: var(--pink); }
+    .card.thd-i .card-single-val { color: var(--red); }
+    .card.thd-v .card-single-val { color: var(--amber); }
+
     /* ═══ CHARTS WRAPPERS ══════════════════ */
     .chart-container {
       position: relative;
@@ -526,9 +548,9 @@
               <div class="card-title">Power Factor</div>
               <div class="card-icon">📐</div>
             </div>
-            <div class="row"><span class="row-label">PF a</span><span class="row-val" id="PFa">0.0000</span></div>
-            <div class="row"><span class="row-label">PF b</span><span class="row-val" id="PFb">0.0000</span></div>
-            <div class="row"><span class="row-label">PF c</span><span class="row-val" id="PFc">0.0000</span></div>
+            <div class="card-single-body">
+              <span class="card-single-val" id="PFtot">0.0000</span>
+            </div>
           </div>
 
           <!-- Cos Phi -->
@@ -537,9 +559,9 @@
               <div class="card-title">Cos φ</div>
               <div class="card-icon">φ</div>
             </div>
-            <div class="row"><span class="row-label">Cos φ a</span><span class="row-val" id="dPFa">0.0000</span></div>
-            <div class="row"><span class="row-label">Cos φ b</span><span class="row-val" id="dPFb">0.0000</span></div>
-            <div class="row"><span class="row-label">Cos φ c</span><span class="row-val" id="dPFc">0.0000</span></div>
+            <div class="card-single-body">
+              <span class="card-single-val" id="dPFtot">0.0000</span>
+            </div>
           </div>
 
           <!-- THD Current -->
@@ -548,9 +570,9 @@
               <div class="card-title">THD Current</div>
               <div class="card-icon">〰</div>
             </div>
-            <div class="row"><span class="row-label">THD Ia</span><span class="row-val" id="THD_Ia">0.00<span class="row-unit">%</span></span></div>
-            <div class="row"><span class="row-label">THD Ib</span><span class="row-val" id="THD_Ib">0.00<span class="row-unit">%</span></span></div>
-            <div class="row"><span class="row-label">THD Ic</span><span class="row-val" id="THD_Ic">0.00<span class="row-unit">%</span></span></div>
+            <div class="card-single-body">
+              <span class="card-single-val" id="THD_I">0.00<span class="row-unit">%</span></span>
+            </div>
           </div>
 
           <!-- THD Voltage -->
@@ -559,9 +581,9 @@
               <div class="card-title">THD Voltage</div>
               <div class="card-icon">〰</div>
             </div>
-            <div class="row"><span class="row-label">THD Van</span><span class="row-val" id="THD_Van">0.00<span class="row-unit">%</span></span></div>
-            <div class="row"><span class="row-label">THD Vbn</span><span class="row-val" id="THD_Vbn">0.00<span class="row-unit">%</span></span></div>
-            <div class="row"><span class="row-label">THD Vcn</span><span class="row-val" id="THD_Vcn">0.00<span class="row-unit">%</span></span></div>
+            <div class="card-single-body">
+              <span class="card-single-val" id="THD_V">0.00<span class="row-unit">%</span></span>
+            </div>
           </div>
 
         </div>
@@ -749,56 +771,50 @@
       const timeLabel = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
       // Hero cards
-      document.getElementById('hFreq').innerHTML = Number(d.freq).toFixed(2) + ' <span style="font-size:11px">Hz</span>';
-      document.getElementById('hPtot').innerHTML = Number(d.power.Ptot).toFixed(2) + ' <span style="font-size:11px">W</span>';
-      document.getElementById('hCosPhi').textContent = Number(d.cosphi.dPFtot).toFixed(4);
-      document.getElementById('hQtotPill').textContent = 'Q: ' + Number(d.power.Qtot).toFixed(0) + ' VAR';
-      document.getElementById('hStotPill').textContent = 'S: ' + Number(d.power.Stot).toFixed(0) + ' VA';
-      document.getElementById('hPFtotPill').textContent = 'PF: ' + Number(d.pf.PFtot).toFixed(4);
+      document.getElementById('hFreq').innerHTML = Number(d.freq || 0).toFixed(2) + ' <span style="font-size:11px">Hz</span>';
+      document.getElementById('hPtot').innerHTML = Number(d.power ? d.power.Ptot : 0).toFixed(2) + ' <span style="font-size:11px">W</span>';
+
+      const cosphiVal = d.cosphi ? (d.cosphi.dPFtot !== undefined ? d.cosphi.dPFtot : (d.cosphi.dPFa !== undefined ? d.cosphi.dPFa : 0)) : 0;
+      const pfVal = d.pf ? (d.pf.PFtot !== undefined ? d.pf.PFtot : (d.pf.PFa !== undefined ? d.pf.PFa : 0)) : 0;
+
+      document.getElementById('hCosPhi').textContent = Number(cosphiVal).toFixed(4);
+      document.getElementById('hQtotPill').textContent = 'Q: ' + Number(d.power ? d.power.Qtot : 0).toFixed(0) + ' VAR';
+      document.getElementById('hStotPill').textContent = 'S: ' + Number(d.power ? d.power.Stot : 0).toFixed(0) + ' VA';
+      document.getElementById('hPFtotPill').textContent = 'PF: ' + Number(pfVal).toFixed(4);
 
       // Current
-      setVal('Ia', d.current.Ia, 3, 'A');
-      setVal('Ib', d.current.Ib, 3, 'A');
-      setVal('Ic', d.current.Ic, 3, 'A');
+      setVal('Ia', d.current ? d.current.Ia : 0, 3, 'A');
+      setVal('Ib', d.current ? d.current.Ib : 0, 3, 'A');
+      setVal('Ic', d.current ? d.current.Ic : 0, 3, 'A');
 
       // Voltage L-L
-      setVal('Vab', d.voltage_ll.Vab, 2, 'V');
-      setVal('Vbc', d.voltage_ll.Vbc, 2, 'V');
-      setVal('Vca', d.voltage_ll.Vca, 2, 'V');
+      setVal('Vab', d.voltage_ll ? d.voltage_ll.Vab : 0, 2, 'V');
+      setVal('Vbc', d.voltage_ll ? d.voltage_ll.Vbc : 0, 2, 'V');
+      setVal('Vca', d.voltage_ll ? d.voltage_ll.Vca : 0, 2, 'V');
 
       // Voltage L-N
-      setVal('Van', d.voltage_ln.Van, 2, 'V');
-      setVal('Vbn', d.voltage_ln.Vbn, 2, 'V');
-      setVal('Vcn', d.voltage_ln.Vcn, 2, 'V');
+      setVal('Van', d.voltage_ln ? d.voltage_ln.Van : 0, 2, 'V');
+      setVal('Vbn', d.voltage_ln ? d.voltage_ln.Vbn : 0, 2, 'V');
+      setVal('Vcn', d.voltage_ln ? d.voltage_ln.Vcn : 0, 2, 'V');
 
       // Power
-      setVal('Ptot', d.power.Ptot, 2, 'W');
-      setVal('Qtot', d.power.Qtot, 2, 'VAR');
-      setVal('Stot', d.power.Stot, 2, 'VA');
+      setVal('Ptot', d.power ? d.power.Ptot : 0, 2, 'W');
+      setVal('Qtot', d.power ? d.power.Qtot : 0, 2, 'VAR');
+      setVal('Stot', d.power ? d.power.Stot : 0, 2, 'VA');
 
-      // PF
-      setVal('PFa', d.pf.PFa, 4);
-      setVal('PFb', d.pf.PFb, 4);
-      setVal('PFc', d.pf.PFc, 4);
+      // Single metrics
+      setVal('PFtot', pfVal, 4);
+      setVal('dPFtot', cosphiVal, 4);
 
-      // Cos Phi
-      setVal('dPFa', d.cosphi.dPFa, 4);
-      setVal('dPFb', d.cosphi.dPFb, 4);
-      setVal('dPFc', d.cosphi.dPFc, 4);
+      const thdIVal = d.thd_i ? (d.thd_i.Ia !== undefined ? d.thd_i.Ia : 0) : 0;
+      setVal('THD_I', thdIVal, 2, '%');
 
-      // THD Current
-      setVal('THD_Ia', d.thd_i.Ia, 2, '%');
-      setVal('THD_Ib', d.thd_i.Ib, 2, '%');
-      setVal('THD_Ic', d.thd_i.Ic, 2, '%');
-
-      // THD Voltage
-      setVal('THD_Van', d.thd_v.Van, 2, '%');
-      setVal('THD_Vbn', d.thd_v.Vbn, 2, '%');
-      setVal('THD_Vcn', d.thd_v.Vcn, 2, '%');
+      const thdVVal = d.thd_v ? (d.thd_v.Vll !== undefined ? d.thd_v.Vll : (d.thd_v.Van !== undefined ? d.thd_v.Van : 0)) : 0;
+      setVal('THD_V', thdVVal, 2, '%');
 
       // Update Cosphi Chart
       cosphiChart.data.labels.push(timeLabel);
-      cosphiChart.data.datasets[0].data.push(d.cosphi.dPFtot);
+      cosphiChart.data.datasets[0].data.push(cosphiVal);
       if (cosphiChart.data.labels.length > 20) {
         cosphiChart.data.labels.shift();
         cosphiChart.data.datasets[0].data.shift();
