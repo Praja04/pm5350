@@ -971,10 +971,11 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
       });
     }
 
-    // Process shift rows: sort chronologically & calculate net_ct_product (delta per hour)
+    // Process shift rows: sort chronologically & calculate net_ct_product (delta per hour) and total_product
     Object.values(shiftGroups).forEach(g => {
       g.rows.sort((a, b) => new Date(a.machine_ts || 0) - new Date(b.machine_ts || 0) || a.id - b.id);
       let prevCumulative = 0;
+      let calculatedTotalProduct = 0;
       g.rows.forEach(r => {
         const rawProd = Number(r.ct_product || 0);
         let netProd = 0;
@@ -984,22 +985,25 @@ app.get(['/api/shifts', '/api/oee/shifts', '/api/:machine/shifts', '/api/oee/:ma
           netProd = rawProd - prevCumulative;
         }
         r.net_ct_product = netProd;
+        calculatedTotalProduct += netProd;
         prevCumulative = rawProd;
       });
+      g.calculated_total_product = calculatedTotalProduct;
     });
 
     // Calculate OEE% and sort by date desc
     const shifts = Object.values(shiftGroups)
       .map(g => {
+        const totalProduct = (g.calculated_total_product !== undefined && g.calculated_total_product > 0) ? g.calculated_total_product : g.max_product;
         const capacity = g.total_uptime * SPEED * LANES;
-        const oee = capacity > 0 ? parseFloat(((g.max_product / capacity) * 100).toFixed(1)) : 0;
+        const oee = capacity > 0 ? parseFloat(((totalProduct / capacity) * 100).toFixed(1)) : 0;
         return {
           shift_key: g.shift_key,
           shift_label: g.shift_label,
           shift_date: g.shift_date,
           shift_num: g.shift_num,
           total_uptime_min: g.total_uptime,
-          total_product: g.max_product,
+          total_product: totalProduct,
           oee_pct: oee,
           record_count: g.record_count,
           hourly_rows: g.rows
